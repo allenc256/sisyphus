@@ -55,6 +55,17 @@ impl Direction {
     }
 }
 
+impl fmt::Display for Direction {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Direction::Up => write!(f, "Up"),
+            Direction::Down => write!(f, "Down"),
+            Direction::Left => write!(f, "Left"),
+            Direction::Right => write!(f, "Right"),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Push {
     pub box_index: u8,
@@ -104,7 +115,7 @@ pub struct PushesIter<'a> {
     box_bits: u32,
 }
 
-impl<'a> Iterator for PushesIter<'a> {
+impl Iterator for PushesIter<'_> {
     type Item = Push;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -177,14 +188,6 @@ impl Boxes {
 
     fn has_box_at(&self, x: u8, y: u8) -> bool {
         self.index[y as usize][x as usize] != 255
-    }
-
-    pub fn len(&self) -> usize {
-        self.count as usize
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.count == 0
     }
 }
 
@@ -301,18 +304,6 @@ impl Game {
             height: height as u8,
             boxes,
         })
-    }
-
-    pub fn width(&self) -> usize {
-        self.width as usize
-    }
-
-    pub fn height(&self) -> usize {
-        self.height as usize
-    }
-
-    pub fn player_pos(&self) -> (u8, u8) {
-        self.player
     }
 
     pub fn set_player_pos(&mut self, x: u8, y: u8) {
@@ -535,9 +526,9 @@ mod tests {
                      ####";
         let game = Game::from_text(input).unwrap();
 
-        assert_eq!(game.width(), 6);
-        assert_eq!(game.height(), 7);
-        assert_eq!(game.player_pos(), (2, 3));
+        assert_eq!(game.width, 6);
+        assert_eq!(game.height, 7);
+        assert_eq!(game.player, (2, 3));
     }
 
     #[test]
@@ -563,7 +554,7 @@ mod tests {
                      #$. #\n\
                      ####";
         let game = Game::from_text(input).unwrap();
-        assert_eq!(game.player_pos(), (2, 1));
+        assert_eq!(game.player, (2, 1));
         assert_eq!(game.get_tile(2, 1), Tile::Goal);
     }
 
@@ -676,7 +667,7 @@ mod tests {
         assert_eq!(game.get_tile(2, 1), Tile::Floor);
         assert!(!game.boxes.has_box_at(2, 1));
         // Player should be at old box position
-        assert_eq!(game.player_pos(), (2, 1));
+        assert_eq!(game.player, (2, 1));
         // Should be solved
         assert!(game.is_solved());
         assert_eq!(game.empty_goals, 0);
@@ -695,7 +686,7 @@ mod tests {
             box_index: box_idx,
             direction: Direction::Right,
         });
-        assert_eq!(game.player_pos(), (2, 1));
+        assert_eq!(game.player, (2, 1));
         assert!(game.boxes.has_box_at(3, 1));
 
         // Test pushing down
@@ -710,7 +701,7 @@ mod tests {
             box_index: box_idx,
             direction: Direction::Down,
         });
-        assert_eq!(game.player_pos(), (2, 2));
+        assert_eq!(game.player, (2, 2));
         assert_eq!(game.get_tile(2, 3), Tile::Goal);
         assert!(game.boxes.has_box_at(2, 3));
 
@@ -725,7 +716,7 @@ mod tests {
             box_index: box_idx,
             direction: Direction::Left,
         });
-        assert_eq!(game.player_pos(), (2, 1));
+        assert_eq!(game.player, (2, 1));
         assert!(game.boxes.has_box_at(1, 1));
 
         // Test pushing up
@@ -740,7 +731,7 @@ mod tests {
             box_index: box_idx,
             direction: Direction::Up,
         });
-        assert_eq!(game.player_pos(), (2, 2));
+        assert_eq!(game.player, (2, 2));
         assert_eq!(game.get_tile(2, 1), Tile::Goal);
         assert!(game.boxes.has_box_at(2, 1));
     }
@@ -788,7 +779,7 @@ mod tests {
         assert_eq!(game.get_tile(3, 1), Tile::Floor);
         assert!(game.boxes.has_box_at(3, 1));
         assert_eq!(game.empty_goals, 1);
-        assert_eq!(game.player_pos(), (2, 1));
+        assert_eq!(game.player, (2, 1));
     }
 
     #[test]
@@ -911,7 +902,7 @@ mod tests {
         let mut game = Game::from_text(input).unwrap();
 
         // Save original state
-        let original_player = game.player_pos();
+        let original_player = game.player;
         let original_boxes = game.boxes.clone();
         let original_goals = game.empty_goals;
 
@@ -924,7 +915,7 @@ mod tests {
         game.push(push);
 
         // Verify state changed
-        assert_eq!(game.player_pos(), (2, 1));
+        assert_eq!(game.player, (2, 1));
         assert!(game.boxes.has_box_at(3, 1));
         assert_eq!(game.empty_goals, 0);
         assert!(game.is_solved());
@@ -933,7 +924,7 @@ mod tests {
         game.unpush(push);
 
         // Should be back to original state
-        assert_eq!(game.player_pos(), original_player);
+        assert_eq!(game.player, original_player);
         assert_eq!(game.boxes, original_boxes);
         assert_eq!(game.empty_goals, original_goals);
         assert!(!game.is_solved());

@@ -2,15 +2,11 @@ use crate::game::{Game, Push};
 
 pub struct Solver {
     nodes_explored: usize,
-    max_depth_reached: usize,
 }
 
 impl Solver {
     pub fn new() -> Self {
-        Solver {
-            nodes_explored: 0,
-            max_depth_reached: 0,
-        }
+        Solver { nodes_explored: 0 }
     }
 
     /// Solve the game using iterative deepening DFS
@@ -34,6 +30,10 @@ impl Solver {
         None
     }
 
+    pub fn nodes_explored(&self) -> usize {
+        self.nodes_explored
+    }
+
     fn dfs(
         &mut self,
         game: &mut Game,
@@ -42,9 +42,6 @@ impl Solver {
         max_depth: usize,
     ) -> bool {
         self.nodes_explored += 1;
-        if depth > self.max_depth_reached {
-            self.max_depth_reached = depth;
-        }
 
         // Check if solved
         if game.is_solved() {
