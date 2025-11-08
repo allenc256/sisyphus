@@ -1,12 +1,19 @@
 use crate::game::{Game, Push};
+use crate::zobrist::{TranspositionTable, Zobrist};
 
 pub struct Solver {
     nodes_explored: usize,
+    tpn_table: TranspositionTable,
+    zobrist: Zobrist,
 }
 
 impl Solver {
     pub fn new() -> Self {
-        Solver { nodes_explored: 0 }
+        Solver {
+            nodes_explored: 0,
+            tpn_table: TranspositionTable::new(),
+            zobrist: Zobrist::new(),
+        }
     }
 
     /// Solve the game using iterative deepening DFS
@@ -21,8 +28,16 @@ impl Solver {
         // Iterative deepening: try increasing depth limits
         for max_depth in 0..=100 {
             solution.clear();
+            self.tpn_table.clear();
 
-            if self.dfs(&mut game.clone(), &mut solution, 0, max_depth) {
+            // Initial hash: only hash box positions, not player
+            let mut boxes_hash = 0u64;
+            for box_idx in 0..game.box_count() {
+                let (x, y) = game.box_position(box_idx);
+                boxes_hash ^= self.zobrist.box_hash(x, y);
+            }
+
+            if self.dfs(&mut game.clone(), &mut solution, 0, max_depth, boxes_hash) {
                 return Some(solution);
             }
         }
@@ -40,6 +55,7 @@ impl Solver {
         solution: &mut Vec<Push>,
         depth: usize,
         max_depth: usize,
+        boxes_hash: u64,
     ) -> bool {
         self.nodes_explored += 1;
 
@@ -59,12 +75,32 @@ impl Solver {
         // Set player to canonical position
         game.set_player_pos(canonical_pos.0, canonical_pos.1);
 
+        // Hash in the canonical player position
+        let full_hash = boxes_hash ^ self.zobrist.player_hash(canonical_pos.0, canonical_pos.1);
+
+        // Check transposition table
+        if self.tpn_table.should_skip(full_hash, depth) {
+            return false;
+        }
+
+        // Mark this state as visited
+        self.tpn_table.insert(full_hash, depth);
+
         // Try each push
         for push in &pushes {
+            let old_box_pos = game.box_position(push.box_index as usize);
+
             solution.push(push);
             game.push(push);
 
-            if self.dfs(game, solution, depth + 1, max_depth) {
+            let new_box_pos = game.box_position(push.box_index as usize);
+
+            // Update boxes hash (unhash old position, hash new position)
+            let new_boxes_hash = boxes_hash
+                ^ self.zobrist.box_hash(old_box_pos.0, old_box_pos.1)
+                ^ self.zobrist.box_hash(new_box_pos.0, new_box_pos.1);
+
+            if self.dfs(game, solution, depth + 1, max_depth, new_boxes_hash) {
                 return true;
             }
 

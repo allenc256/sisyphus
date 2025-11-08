@@ -1,6 +1,6 @@
 use std::fmt;
 
-const MAX_SIZE: usize = 64;
+pub const MAX_SIZE: usize = 64;
 const MAX_BOXES: usize = 32;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -312,6 +312,18 @@ impl Game {
 
     pub fn get_tile(&self, x: u8, y: u8) -> Tile {
         self.tiles[y as usize][x as usize]
+    }
+
+    pub fn player(&self) -> (u8, u8) {
+        self.player
+    }
+
+    pub fn box_count(&self) -> usize {
+        self.boxes.count as usize
+    }
+
+    pub fn box_position(&self, index: usize) -> (u8, u8) {
+        self.boxes.positions[index]
     }
 
     /// Move from position (x, y) in the given direction.

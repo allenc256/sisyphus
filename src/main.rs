@@ -1,6 +1,7 @@
 mod game;
 mod levels;
 mod solver;
+mod zobrist;
 
 use clap::Parser;
 use game::Game;
