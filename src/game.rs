@@ -10,7 +10,7 @@ pub enum Tile {
     Goal,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Direction {
     Up,
     Down,
@@ -55,7 +55,7 @@ impl Direction {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Push {
     pub box_index: u8,
     pub direction: Direction,
@@ -470,11 +470,11 @@ mod tests {
     #[test]
     fn test_parse_basic_board() {
         let input = "####\n# .#\n#  ###\n#*@  #\n#  $ #\n#  ###\n####";
-        let board = Game::from_text(input).unwrap();
+        let game = Game::from_text(input).unwrap();
 
-        assert_eq!(board.width(), 6);
-        assert_eq!(board.height(), 7);
-        assert_eq!(board.player_pos(), (2, 3));
+        assert_eq!(game.width(), 6);
+        assert_eq!(game.height(), 7);
+        assert_eq!(game.player_pos(), (2, 3));
     }
 
     #[test]
@@ -492,24 +492,24 @@ mod tests {
     #[test]
     fn test_player_on_goal() {
         let input = "####\n#$+ #\n#$. #\n####";
-        let board = Game::from_text(input).unwrap();
-        assert_eq!(board.player_pos(), (2, 1));
-        assert_eq!(board.get_tile(2, 1), Tile::Goal);
+        let game = Game::from_text(input).unwrap();
+        assert_eq!(game.player_pos(), (2, 1));
+        assert_eq!(game.get_tile(2, 1), Tile::Goal);
     }
 
     #[test]
     fn test_display() {
         let input = "####\n# .#\n#  ###\n#*@  #\n#  $ #\n#  ###\n####";
-        let board = Game::from_text(input).unwrap();
-        let output = board.to_string();
+        let game = Game::from_text(input).unwrap();
+        let output = game.to_string();
         assert_eq!(output.trim(), input);
     }
 
     #[test]
     fn test_is_solved() {
         let solved = "####\n#*@#\n####";
-        let board = Game::from_text(solved).unwrap();
-        assert!(board.is_solved());
+        let game = Game::from_text(solved).unwrap();
+        assert!(game.is_solved());
 
         let unsolved = "####\n#$.#\n# @#\n####";
         let board = Game::from_text(unsolved).unwrap();
@@ -520,21 +520,21 @@ mod tests {
     fn test_empty_goals_tarcking() {
         // Board with 1 box on goal, 1 box not on goal
         let input = "####\n# .#\n#  ###\n#*@  #\n#  $ #\n#  ###\n####";
-        let board = Game::from_text(input).unwrap();
-        assert_eq!(board.empty_goals, 1);
-        assert!(!board.is_solved());
+        let game = Game::from_text(input).unwrap();
+        assert_eq!(game.empty_goals, 1);
+        assert!(!game.is_solved());
 
         // Board with all boxes on goals
         let all_solved = "####\n#*@#\n####";
-        let board = Game::from_text(all_solved).unwrap();
-        assert_eq!(board.empty_goals, 0);
-        assert!(board.is_solved());
+        let game = Game::from_text(all_solved).unwrap();
+        assert_eq!(game.empty_goals, 0);
+        assert!(game.is_solved());
 
         // Board with no boxes on goals
         let none_solved = "####\n#$.#\n# @#\n####";
-        let board = Game::from_text(none_solved).unwrap();
-        assert_eq!(board.empty_goals, 1);
-        assert!(!board.is_solved());
+        let game = Game::from_text(none_solved).unwrap();
+        assert_eq!(game.empty_goals, 1);
+        assert!(!game.is_solved());
     }
 
     #[test]
@@ -556,144 +556,179 @@ mod tests {
     fn test_push_box_basic() {
         // Simple board: player can push box right onto goal
         let input = "####\n#@$.#\n####";
-        let mut board = Game::from_text(input).unwrap();
+        let mut game = Game::from_text(input).unwrap();
 
         // Push box right (box at position (2,1) is box index 0)
-        let box_idx = board.boxes.index[1][2];
-        board.push_box(box_idx, Direction::Right);
+        let box_idx = game.boxes.index[1][2];
+        game.push_box(box_idx, Direction::Right);
 
         // Box should now be on goal at (3, 1)
-        assert_eq!(board.get_tile(3, 1), Tile::Goal);
-        assert!(board.boxes.has_box_at(3, 1));
+        assert_eq!(game.get_tile(3, 1), Tile::Goal);
+        assert!(game.boxes.has_box_at(3, 1));
         // Original box position should be floor
-        assert_eq!(board.get_tile(2, 1), Tile::Floor);
-        assert!(!board.boxes.has_box_at(2, 1));
+        assert_eq!(game.get_tile(2, 1), Tile::Floor);
+        assert!(!game.boxes.has_box_at(2, 1));
         // Player should be at old box position
-        assert_eq!(board.player_pos(), (2, 1));
+        assert_eq!(game.player_pos(), (2, 1));
         // Should be solved
-        assert!(board.is_solved());
-        assert_eq!(board.empty_goals, 0);
+        assert!(game.is_solved());
+        assert_eq!(game.empty_goals, 0);
     }
 
     #[test]
     fn test_push_box_all_directions() {
         // Test pushing right
         let input = "####\n#@$ #\n# . #\n####";
-        let mut board = Game::from_text(input).unwrap();
-        let box_idx = board.boxes.index[1][2];
-        board.push_box(box_idx, Direction::Right);
-        assert_eq!(board.player_pos(), (2, 1));
-        assert!(board.boxes.has_box_at(3, 1));
+        let mut game = Game::from_text(input).unwrap();
+        let box_idx = game.boxes.index[1][2];
+        game.push_box(box_idx, Direction::Right);
+        assert_eq!(game.player_pos(), (2, 1));
+        assert!(game.boxes.has_box_at(3, 1));
 
         // Test pushing down
         let input = "#####\n# @ #\n# $ #\n# . #\n#####";
-        let mut board = Game::from_text(input).unwrap();
-        let box_idx = board.boxes.index[2][2];
-        board.push_box(box_idx, Direction::Down);
-        assert_eq!(board.player_pos(), (2, 2));
-        assert_eq!(board.get_tile(2, 3), Tile::Goal);
-        assert!(board.boxes.has_box_at(2, 3));
+        let mut game = Game::from_text(input).unwrap();
+        let box_idx = game.boxes.index[2][2];
+        game.push_box(box_idx, Direction::Down);
+        assert_eq!(game.player_pos(), (2, 2));
+        assert_eq!(game.get_tile(2, 3), Tile::Goal);
+        assert!(game.boxes.has_box_at(2, 3));
 
         // Test pushing left
         let input = "####\n# $@#\n# . #\n####";
-        let mut board = Game::from_text(input).unwrap();
-        let box_idx = board.boxes.index[1][2];
-        board.push_box(box_idx, Direction::Left);
-        assert_eq!(board.player_pos(), (2, 1));
-        assert!(board.boxes.has_box_at(1, 1));
+        let mut game = Game::from_text(input).unwrap();
+        let box_idx = game.boxes.index[1][2];
+        game.push_box(box_idx, Direction::Left);
+        assert_eq!(game.player_pos(), (2, 1));
+        assert!(game.boxes.has_box_at(1, 1));
 
         // Test pushing up
         let input = "#####\n# . #\n# $ #\n# @ #\n#####";
-        let mut board = Game::from_text(input).unwrap();
-        let box_idx = board.boxes.index[2][2];
-        board.push_box(box_idx, Direction::Up);
-        assert_eq!(board.player_pos(), (2, 2));
-        assert_eq!(board.get_tile(2, 1), Tile::Goal);
-        assert!(board.boxes.has_box_at(2, 1));
+        let mut game = Game::from_text(input).unwrap();
+        let box_idx = game.boxes.index[2][2];
+        game.push_box(box_idx, Direction::Up);
+        assert_eq!(game.player_pos(), (2, 2));
+        assert_eq!(game.get_tile(2, 1), Tile::Goal);
+        assert!(game.boxes.has_box_at(2, 1));
     }
 
     #[test]
     fn test_push_box_floor_to_goal() {
         // Push box from floor onto goal
         let input = "####\n#@$.#\n####";
-        let mut board = Game::from_text(input).unwrap();
+        let mut game = Game::from_text(input).unwrap();
 
-        assert_eq!(board.empty_goals, 1);
-        let box_idx = board.boxes.index[1][2];
-        board.push_box(box_idx, Direction::Right);
+        assert_eq!(game.empty_goals, 1);
+        let box_idx = game.boxes.index[1][2];
+        game.push_box(box_idx, Direction::Right);
 
-        assert_eq!(board.get_tile(3, 1), Tile::Goal);
-        assert!(board.boxes.has_box_at(3, 1));
-        assert_eq!(board.empty_goals, 0);
+        assert_eq!(game.get_tile(3, 1), Tile::Goal);
+        assert!(game.boxes.has_box_at(3, 1));
+        assert_eq!(game.empty_goals, 0);
     }
 
     #[test]
     fn test_push_box_goal_to_floor() {
         // Push box from goal onto floor
         let input = "#####\n#@*  #\n#####";
-        let mut board = Game::from_text(input).unwrap();
+        let mut game = Game::from_text(input).unwrap();
 
-        assert_eq!(board.empty_goals, 0);
-        assert_eq!(board.get_tile(2, 1), Tile::Goal);
-        assert!(board.boxes.has_box_at(2, 1));
+        assert_eq!(game.empty_goals, 0);
+        assert_eq!(game.get_tile(2, 1), Tile::Goal);
+        assert!(game.boxes.has_box_at(2, 1));
 
-        let box_idx = board.boxes.index[1][2];
-        board.push_box(box_idx, Direction::Right);
+        let box_idx = game.boxes.index[1][2];
+        game.push_box(box_idx, Direction::Right);
 
-        assert_eq!(board.get_tile(2, 1), Tile::Goal);
-        assert!(!board.boxes.has_box_at(2, 1));
-        assert_eq!(board.get_tile(3, 1), Tile::Floor);
-        assert!(board.boxes.has_box_at(3, 1));
-        assert_eq!(board.empty_goals, 1);
-        assert_eq!(board.player_pos(), (2, 1));
+        assert_eq!(game.get_tile(2, 1), Tile::Goal);
+        assert!(!game.boxes.has_box_at(2, 1));
+        assert_eq!(game.get_tile(3, 1), Tile::Floor);
+        assert!(game.boxes.has_box_at(3, 1));
+        assert_eq!(game.empty_goals, 1);
+        assert_eq!(game.player_pos(), (2, 1));
     }
 
     #[test]
     fn test_push_box_goal_to_goal() {
         // Push box from one goal to another goal
         let input = "######\n#@*.$#\n######";
-        let mut board = Game::from_text(input).unwrap();
+        let mut game = Game::from_text(input).unwrap();
 
-        assert_eq!(board.empty_goals, 1);
-        let box_idx = board.boxes.index[1][2];
-        board.push_box(box_idx, Direction::Right);
+        assert_eq!(game.empty_goals, 1);
+        let box_idx = game.boxes.index[1][2];
+        game.push_box(box_idx, Direction::Right);
 
-        assert_eq!(board.get_tile(2, 1), Tile::Goal);
-        assert!(!board.boxes.has_box_at(2, 1));
-        assert_eq!(board.get_tile(3, 1), Tile::Goal);
-        assert!(board.boxes.has_box_at(3, 1));
-        assert_eq!(board.empty_goals, 1);
+        assert_eq!(game.get_tile(2, 1), Tile::Goal);
+        assert!(!game.boxes.has_box_at(2, 1));
+        assert_eq!(game.get_tile(3, 1), Tile::Goal);
+        assert!(game.boxes.has_box_at(3, 1));
+        assert_eq!(game.empty_goals, 1);
     }
 
     #[test]
     #[should_panic(expected = "Invalid box index")]
     fn test_push_box_no_box() {
         let input = "####\n#@  #\n####";
-        let mut board = Game::from_text(input).unwrap();
+        let mut game = Game::from_text(input).unwrap();
 
         // Try to push with invalid box index
-        board.push_box(10, Direction::Right);
+        game.push_box(10, Direction::Right);
     }
 
     #[test]
     #[should_panic(expected = "destination blocked")]
     fn test_push_box_blocked() {
         let input = "####\n#@$##\n# . #\n####";
-        let mut board = Game::from_text(input).unwrap();
+        let mut game = Game::from_text(input).unwrap();
 
         // Try to push box into wall
-        let box_idx = board.boxes.index[1][2];
-        board.push_box(box_idx, Direction::Right);
+        let box_idx = game.boxes.index[1][2];
+        game.push_box(box_idx, Direction::Right);
     }
 
     #[test]
     #[should_panic(expected = "destination blocked")]
     fn test_push_box_into_another_box() {
         let input = "######\n#@$$  #\n# ..  #\n######";
-        let mut board = Game::from_text(input).unwrap();
+        let mut game = Game::from_text(input).unwrap();
 
         // Try to push box into another box
-        let box_idx = board.boxes.index[1][2];
-        board.push_box(box_idx, Direction::Right);
+        let box_idx = game.boxes.index[1][2];
+        game.push_box(box_idx, Direction::Right);
+    }
+
+    #[test]
+    fn test_compute_pushes() {
+        let input = r#"####
+# .#
+#  ###
+#*@  #
+#  $ #
+#  ###
+####"#;
+        let game = Game::from_text(input).unwrap();
+        let mut actual = game.compute_pushes().iter().collect::<Vec<_>>();
+        let mut expected = vec![
+            Push {
+                box_index: 0,
+                direction: Direction::Up,
+            },
+            Push {
+                box_index: 0,
+                direction: Direction::Down,
+            },
+            Push {
+                box_index: 1,
+                direction: Direction::Left,
+            },
+            Push {
+                box_index: 1,
+                direction: Direction::Right,
+            },
+        ];
+
+        expected.sort();
+        actual.sort();
+        assert_eq!(expected, actual);
     }
 }
