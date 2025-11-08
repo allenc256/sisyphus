@@ -475,12 +475,12 @@ mod tests {
     #[test]
     fn test_parse_basic_board() {
         let input = "####\n\
-                           # .#\n\
-                           #  ###\n\
-                           #*@  #\n\
-                           #  $ #\n\
-                           #  ###\n\
-                           ####";
+                     # .#\n\
+                     #  ###\n\
+                     #*@  #\n\
+                     #  $ #\n\
+                     #  ###\n\
+                     ####";
         let game = Game::from_text(input).unwrap();
 
         assert_eq!(game.width(), 6);
@@ -491,25 +491,25 @@ mod tests {
     #[test]
     fn test_no_player() {
         let input = "####\n\
-                           #  #\n\
-                           ####";
+                     #  #\n\
+                     ####";
         assert!(Game::from_text(input).is_err());
     }
 
     #[test]
     fn test_multiple_players() {
         let input = "####\n\
-                           #@@#\n\
-                           ####";
+                     #@@#\n\
+                     ####";
         assert!(Game::from_text(input).is_err());
     }
 
     #[test]
     fn test_player_on_goal() {
         let input = "####\n\
-                           #$+ #\n\
-                           #$. #\n\
-                           ####";
+                     #$+ #\n\
+                     #$. #\n\
+                     ####";
         let game = Game::from_text(input).unwrap();
         assert_eq!(game.player_pos(), (2, 1));
         assert_eq!(game.get_tile(2, 1), Tile::Goal);
@@ -518,12 +518,12 @@ mod tests {
     #[test]
     fn test_display() {
         let input = "####\n\
-                           # .#\n\
-                           #  ###\n\
-                           #*@  #\n\
-                           #  $ #\n\
-                           #  ###\n\
-                           ####";
+                     # .#\n\
+                     #  ###\n\
+                     #*@  #\n\
+                     #  $ #\n\
+                     #  ###\n\
+                     ####";
         let game = Game::from_text(input).unwrap();
         let output = game.to_string();
         assert_eq!(output.trim(), input);
@@ -531,11 +531,16 @@ mod tests {
 
     #[test]
     fn test_is_solved() {
-        let solved = "####\n#*@#\n####";
+        let solved = "####\n\
+                      #*@#\n\
+                      ####";
         let game = Game::from_text(solved).unwrap();
         assert!(game.is_solved());
 
-        let unsolved = "####\n#$.#\n# @#\n####";
+        let unsolved = "####\n\
+                        #$.#\n\
+                        # @#\n\
+                        ####";
         let board = Game::from_text(unsolved).unwrap();
         assert!(!board.is_solved());
     }
@@ -544,29 +549,29 @@ mod tests {
     fn test_empty_goals_tarcking() {
         // Board with 1 box on goal, 1 box not on goal
         let input = "####\n\
-                           # .#\n\
-                           #  ###\n\
-                           #*@  #\n\
-                           #  $ #\n\
-                           #  ###\n\
-                           ####";
+                     # .#\n\
+                     #  ###\n\
+                     #*@  #\n\
+                     #  $ #\n\
+                     #  ###\n\
+                     ####";
         let game = Game::from_text(input).unwrap();
         assert_eq!(game.empty_goals, 1);
         assert!(!game.is_solved());
 
         // Board with all boxes on goals
         let all_solved = "####\n\
-                                #*@#\n\
-                                ####";
+                          #*@#\n\
+                          ####";
         let game = Game::from_text(all_solved).unwrap();
         assert_eq!(game.empty_goals, 0);
         assert!(game.is_solved());
 
         // Board with no boxes on goals
         let none_solved = "####\n\
-                                 #$.#\n\
-                                 # @#\n\
-                                 ####";
+                           #$.#\n\
+                           # @#\n\
+                           ####";
         let game = Game::from_text(none_solved).unwrap();
         assert_eq!(game.empty_goals, 1);
         assert!(!game.is_solved());
@@ -576,24 +581,24 @@ mod tests {
     fn test_goal_box_count_validation() {
         // More goals than boxes - should fail
         let more_goals = "####\n\
-                                #..#\n\
-                                # $@#\n\
-                                ####";
+                          #..#\n\
+                          # $@#\n\
+                          ####";
         assert!(Game::from_text(more_goals).is_err());
 
         // More boxes than goals - should fail
         let more_boxes = "####\n\
-                                #$$#\n\
-                                # .@#\n\
-                                ####";
+                          #$$#\n\
+                          # .@#\n\
+                          ####";
         assert!(Game::from_text(more_boxes).is_err());
 
         // Equal goals and boxes - should succeed
         let balanced = "####\n\
-                              #$.#\n\
-                              # * #\n\
-                              # @#\n\
-                              ####";
+                        #$.#\n\
+                        # * #\n\
+                        # @#\n\
+                        ####";
         assert!(Game::from_text(balanced).is_ok());
     }
 
@@ -601,8 +606,8 @@ mod tests {
     fn test_push_box_basic() {
         // Simple board: player can push box right onto goal
         let input = "####\n\
-                           #@$.#\n\
-                           ####";
+                     #@$.#\n\
+                     ####";
         let mut game = Game::from_text(input).unwrap();
 
         // Push box right (box at position (2,1) is box index 0)
@@ -626,9 +631,9 @@ mod tests {
     fn test_push_box_all_directions() {
         // Test pushing right
         let input = "####\n\
-                           #@$ #\n\
-                           # . #\n\
-                           ####";
+                     #@$ #\n\
+                     # . #\n\
+                     ####";
         let mut game = Game::from_text(input).unwrap();
         let box_idx = game.boxes.index[1][2];
         game.push_box(box_idx, Direction::Right);
@@ -637,10 +642,10 @@ mod tests {
 
         // Test pushing down
         let input = "#####\n\
-                           # @ #\n\
-                           # $ #\n\
-                           # . #\n\
-                           #####";
+                     # @ #\n\
+                     # $ #\n\
+                     # . #\n\
+                     #####";
         let mut game = Game::from_text(input).unwrap();
         let box_idx = game.boxes.index[2][2];
         game.push_box(box_idx, Direction::Down);
@@ -650,9 +655,9 @@ mod tests {
 
         // Test pushing left
         let input = "####\n\
-                           # $@#\n\
-                           # . #\n\
-                           ####";
+                     # $@#\n\
+                     # . #\n\
+                     ####";
         let mut game = Game::from_text(input).unwrap();
         let box_idx = game.boxes.index[1][2];
         game.push_box(box_idx, Direction::Left);
@@ -661,10 +666,10 @@ mod tests {
 
         // Test pushing up
         let input = "#####\n\
-                           # . #\n\
-                           # $ #\n\
-                           # @ #\n\
-                           #####";
+                     # . #\n\
+                     # $ #\n\
+                     # @ #\n\
+                     #####";
         let mut game = Game::from_text(input).unwrap();
         let box_idx = game.boxes.index[2][2];
         game.push_box(box_idx, Direction::Up);
@@ -677,8 +682,8 @@ mod tests {
     fn test_push_box_floor_to_goal() {
         // Push box from floor onto goal
         let input = "####\n\
-                           #@$.#\n\
-                           ####";
+                     #@$.#\n\
+                     ####";
         let mut game = Game::from_text(input).unwrap();
 
         assert_eq!(game.empty_goals, 1);
@@ -694,8 +699,8 @@ mod tests {
     fn test_push_box_goal_to_floor() {
         // Push box from goal onto floor
         let input = "#####\n\
-                           #@*  #\n\
-                           #####";
+                     #@*  #\n\
+                     #####";
         let mut game = Game::from_text(input).unwrap();
 
         assert_eq!(game.empty_goals, 0);
@@ -717,8 +722,8 @@ mod tests {
     fn test_push_box_goal_to_goal() {
         // Push box from one goal to another goal
         let input = "######\n\
-                           #@*.$#\n\
-                           ######";
+                     #@*.$#\n\
+                     ######";
         let mut game = Game::from_text(input).unwrap();
 
         assert_eq!(game.empty_goals, 1);
@@ -736,8 +741,8 @@ mod tests {
     #[should_panic(expected = "Invalid box index")]
     fn test_push_box_no_box() {
         let input = "####\n\
-                           #@  #\n\
-                           ####";
+                     #@  #\n\
+                     ####";
         let mut game = Game::from_text(input).unwrap();
 
         // Try to push with invalid box index
@@ -748,9 +753,9 @@ mod tests {
     #[should_panic(expected = "destination blocked")]
     fn test_push_box_blocked() {
         let input = "####\n\
-                           #@$##\n\
-                           # . #\n\
-                           ####";
+                     #@$##\n\
+                     # . #\n\
+                     ####";
         let mut game = Game::from_text(input).unwrap();
 
         // Try to push box into wall
@@ -762,9 +767,9 @@ mod tests {
     #[should_panic(expected = "destination blocked")]
     fn test_push_box_into_another_box() {
         let input = "######\n\
-                           #@$$  #\n\
-                           # ..  #\n\
-                           ######";
+                     #@$$  #\n\
+                     # ..  #\n\
+                     ######";
         let mut game = Game::from_text(input).unwrap();
 
         // Try to push box into another box
@@ -775,12 +780,12 @@ mod tests {
     #[test]
     fn test_compute_pushes() {
         let input = "####\n\
-                           # .#\n\
-                           #  ###\n\
-                           #*@  #\n\
-                           #  $ #\n\
-                           #  ###\n\
-                           ####";
+                     # .#\n\
+                     #  ###\n\
+                     #*@  #\n\
+                     #  $ #\n\
+                     #  ###\n\
+                     ####";
         let game = Game::from_text(input).unwrap();
         let mut actual = game.compute_pushes().iter().collect::<Vec<_>>();
         let mut expected = vec![
