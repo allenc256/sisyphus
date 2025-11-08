@@ -15,16 +15,16 @@ impl Zobrist {
         let mut rng = ChaCha8Rng::seed_from_u64(0x123456789abcdef0);
 
         let mut box_hashes = [[0u64; MAX_SIZE]; MAX_SIZE];
-        for y in 0..MAX_SIZE {
-            for x in 0..MAX_SIZE {
-                box_hashes[y][x] = rng.next_u64();
+        for row in box_hashes.iter_mut() {
+            for cell in row.iter_mut() {
+                *cell = rng.next_u64();
             }
         }
 
         let mut player_hashes = [[0u64; MAX_SIZE]; MAX_SIZE];
-        for y in 0..MAX_SIZE {
-            for x in 0..MAX_SIZE {
-                player_hashes[y][x] = rng.next_u64();
+        for row in player_hashes.iter_mut() {
+            for cell in row.iter_mut() {
+                *cell = rng.next_u64();
             }
         }
 
@@ -76,16 +76,6 @@ impl TranspositionTable {
     /// Clear the transposition table
     pub fn clear(&mut self) {
         self.visited.clear();
-    }
-
-    /// Get the number of entries in the table
-    pub fn len(&self) -> usize {
-        self.visited.len()
-    }
-
-    /// Check if the table is empty
-    pub fn is_empty(&self) -> bool {
-        self.visited.is_empty()
     }
 }
 

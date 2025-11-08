@@ -314,10 +314,6 @@ impl Game {
         self.tiles[y as usize][x as usize]
     }
 
-    pub fn player(&self) -> (u8, u8) {
-        self.player
-    }
-
     pub fn box_count(&self) -> usize {
         self.boxes.count as usize
     }
