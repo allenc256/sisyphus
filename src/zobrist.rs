@@ -1,7 +1,6 @@
 use crate::game::MAX_SIZE;
 use rand::{RngCore, SeedableRng};
 use rand_chacha::ChaCha8Rng;
-use std::collections::HashMap;
 
 /// Zobrist hash for game states
 pub struct Zobrist {
@@ -45,58 +44,3 @@ impl Zobrist {
     }
 }
 
-/// Transposition table for storing visited states
-pub struct TpnTable {
-    visited: HashMap<u64, usize>, // Maps hash to depth at which it was first visited
-}
-
-impl TpnTable {
-    pub fn new() -> Self {
-        TpnTable {
-            visited: HashMap::new(),
-        }
-    }
-
-    /// Check if a state has been visited at an equal or lesser depth
-    /// Returns true if we should skip this state
-    pub fn should_skip(&self, hash: u64, depth: usize) -> bool {
-        if let Some(&prev_depth) = self.visited.get(&hash) {
-            // Skip if we've seen this state at a shallower or equal depth
-            depth >= prev_depth
-        } else {
-            false
-        }
-    }
-
-    /// Mark a state as visited at the given depth
-    pub fn insert(&mut self, hash: u64, depth: usize) {
-        self.visited.insert(hash, depth);
-    }
-
-    /// Clear the transposition table
-    pub fn clear(&mut self) {
-        self.visited.clear();
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_transposition_table_insert_and_check() {
-        let mut tt = TpnTable::new();
-        let hash = 0x123456789abcdef0u64;
-
-        // First visit at depth 5
-        assert!(!tt.should_skip(hash, 5));
-        tt.insert(hash, 5);
-
-        // Should skip at same or greater depth
-        assert!(tt.should_skip(hash, 5));
-        assert!(tt.should_skip(hash, 6));
-
-        // Should not skip at lesser depth
-        assert!(!tt.should_skip(hash, 4));
-    }
-}

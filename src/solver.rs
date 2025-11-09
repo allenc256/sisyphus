@@ -1,24 +1,38 @@
 use crate::game::{Game, Push};
-use crate::zobrist::{TpnTable, Zobrist};
+use crate::heuristic::Heuristic;
+use crate::zobrist::Zobrist;
+use std::collections::HashMap;
 
-pub struct Solver {
-    nodes_explored: usize,
-    max_nodes_explored: usize,
-    tpn_table: TpnTable,
-    zobrist: Zobrist,
+/// Result of an IDA* search iteration
+enum SearchResult {
+    /// Solution found
+    Found,
+    /// No solution at this threshold, but found states with this minimum f-cost
+    Exceeded(usize),
+    /// Node limit exceeded
+    Cutoff,
 }
 
-impl Solver {
-    pub fn new(max_nodes_explored: usize) -> Self {
+pub struct Solver<H: Heuristic> {
+    nodes_explored: usize,
+    max_nodes_explored: usize,
+    table: HashMap<u64, usize>, // Transposition table mapping state hash to g-cost of first visit
+    zobrist: Zobrist,
+    heuristic: H,
+}
+
+impl<H: Heuristic> Solver<H> {
+    pub fn new(max_nodes_explored: usize, heuristic: H) -> Self {
         Solver {
             nodes_explored: 0,
             max_nodes_explored,
-            tpn_table: TpnTable::new(),
+            table: HashMap::new(),
             zobrist: Zobrist::new(),
+            heuristic,
         }
     }
 
-    /// Solve the game using iterative deepening DFS
+    /// Solve the game using IDA* (Iterative Deepening A*)
     pub fn solve(&mut self, game: &Game) -> Option<Vec<Push>> {
         // Check if already solved
         if game.is_solved() {
@@ -27,29 +41,36 @@ impl Solver {
 
         let mut solution = Vec::new();
 
-        // Iterative deepening: try increasing depth limits
-        let mut max_depth = 0;
+        // Initial hash: only hash box positions, not player
+        let mut boxes_hash = 0u64;
+        for box_idx in 0..game.box_count() {
+            let (x, y) = game.box_pos(box_idx);
+            boxes_hash ^= self.zobrist.box_hash(x, y);
+        }
+
+        // IDA*: try increasing f-cost thresholds
+        let mut threshold = self.heuristic.compute(game);
+
         loop {
             solution.clear();
-            self.tpn_table.clear();
+            self.table.clear();
 
-            // Initial hash: only hash box positions, not player
-            let mut boxes_hash = 0u64;
-            for box_idx in 0..game.box_count() {
-                let (x, y) = game.box_position(box_idx);
-                boxes_hash ^= self.zobrist.box_hash(x, y);
-            }
-
-            if self.dfs(&mut game.clone(), &mut solution, 0, max_depth, boxes_hash) {
-                return Some(solution);
+            match self.search(&mut game.clone(), &mut solution, 0, threshold, boxes_hash) {
+                SearchResult::Found => {
+                    return Some(solution);
+                }
+                SearchResult::Exceeded(next_threshold) => {
+                    threshold = next_threshold;
+                }
+                SearchResult::Cutoff => {
+                    return None;
+                }
             }
 
             // If we've exceeded max nodes, give up
             if self.nodes_explored > self.max_nodes_explored {
                 return None;
             }
-
-            max_depth += 1;
         }
     }
 
@@ -57,29 +78,34 @@ impl Solver {
         self.nodes_explored
     }
 
-    fn dfs(
+    /// IDA* search function
+    fn search(
         &mut self,
         game: &mut Game,
         solution: &mut Vec<Push>,
-        depth: usize,
-        max_depth: usize,
+        g_cost: usize,
+        threshold: usize,
         boxes_hash: u64,
-    ) -> bool {
+    ) -> SearchResult {
         self.nodes_explored += 1;
 
         // Check if we've exceeded the node limit
         if self.nodes_explored > self.max_nodes_explored {
-            return false;
+            return SearchResult::Cutoff;
+        }
+
+        // Compute heuristic and f-cost
+        let h_cost = self.heuristic.compute(game);
+        let f_cost = g_cost + h_cost;
+
+        // If f-cost exceeds threshold, return it as a candidate for next threshold
+        if f_cost > threshold {
+            return SearchResult::Exceeded(f_cost);
         }
 
         // Check if solved
         if game.is_solved() {
-            return true;
-        }
-
-        // Check depth limit
-        if depth >= max_depth {
-            return false;
+            return SearchResult::Found;
         }
 
         // Get all valid pushes and canonical position
@@ -89,42 +115,57 @@ impl Solver {
         let full_hash = boxes_hash ^ self.zobrist.player_hash(canonical_pos.0, canonical_pos.1);
 
         // Check transposition table
-        if self.tpn_table.should_skip(full_hash, depth) {
-            return false;
+        if let Some(&prev_g_cost) = self.table.get(&full_hash) {
+            // Skip if we've seen this state at a shallower or equal g-cost
+            if g_cost >= prev_g_cost {
+                return SearchResult::Exceeded(usize::MAX);
+            }
         }
 
         // Mark this state as visited
-        self.tpn_table.insert(full_hash, depth);
+        self.table.insert(full_hash, g_cost);
+
+        let mut min_exceeded = usize::MAX;
 
         // Try each push
         for push in &pushes {
-            let old_box_pos = game.box_position(push.box_index as usize);
+            let old_box_pos = game.box_pos(push.box_index as usize);
 
             solution.push(push);
             game.push(push);
 
-            let new_box_pos = game.box_position(push.box_index as usize);
+            let new_box_pos = game.box_pos(push.box_index as usize);
 
             // Update boxes hash (unhash old position, hash new position)
             let new_boxes_hash = boxes_hash
                 ^ self.zobrist.box_hash(old_box_pos.0, old_box_pos.1)
                 ^ self.zobrist.box_hash(new_box_pos.0, new_box_pos.1);
 
-            if self.dfs(game, solution, depth + 1, max_depth, new_boxes_hash) {
-                return true;
+            match self.search(game, solution, g_cost + 1, threshold, new_boxes_hash) {
+                SearchResult::Found => {
+                    return SearchResult::Found;
+                }
+                SearchResult::Exceeded(t) => {
+                    min_exceeded = min_exceeded.min(t);
+                }
+                SearchResult::Cutoff => {
+                    game.unpush(push);
+                    solution.pop();
+                    return SearchResult::Cutoff;
+                }
             }
 
             game.unpush(push);
             solution.pop();
         }
 
-        false
+        SearchResult::Exceeded(min_exceeded)
     }
 }
 
-impl Default for Solver {
+impl Default for Solver<crate::heuristic::GreedyHeuristic> {
     fn default() -> Self {
-        Self::new(5000000)
+        Self::new(5000000, crate::heuristic::GreedyHeuristic::new())
     }
 }
 
@@ -139,7 +180,8 @@ mod tests {
                      ####";
         let game = Game::from_text(input).unwrap();
 
-        let mut solver = Solver::new(5000000);
+        let heuristic = crate::heuristic::GreedyHeuristic::new();
+        let mut solver = Solver::new(5000000, heuristic);
         let solution = solver.solve(&game);
 
         assert!(solution.is_some());
@@ -161,7 +203,8 @@ mod tests {
                      ####";
         let game = Game::from_text(input).unwrap();
 
-        let mut solver = Solver::new(5000000);
+        let heuristic = crate::heuristic::GreedyHeuristic::new();
+        let mut solver = Solver::new(5000000, heuristic);
         let solution = solver.solve(&game);
 
         assert!(solution.is_some());
@@ -175,7 +218,8 @@ mod tests {
                      #####";
         let game = Game::from_text(input).unwrap();
 
-        let mut solver = Solver::new(5000000);
+        let heuristic = crate::heuristic::GreedyHeuristic::new();
+        let mut solver = Solver::new(5000000, heuristic);
         let solution = solver.solve(&game);
 
         assert!(solution.is_some());

@@ -1,7 +1,7 @@
 use std::fmt;
 
 pub const MAX_SIZE: usize = 64;
-const MAX_BOXES: usize = 32;
+pub const MAX_BOXES: usize = 32;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Tile {
@@ -159,6 +159,31 @@ struct Boxes {
     index: [[u8; MAX_SIZE]; MAX_SIZE],
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Goals {
+    positions: [(u8, u8); MAX_BOXES],
+    count: u8,
+}
+
+impl Goals {
+    fn new() -> Self {
+        Goals {
+            positions: [(0, 0); MAX_BOXES],
+            count: 0,
+        }
+    }
+
+    fn add(&mut self, x: u8, y: u8) {
+        assert!(
+            (self.count as usize) < MAX_BOXES,
+            "Cannot add goal: maximum of {} goals exceeded",
+            MAX_BOXES
+        );
+        self.positions[self.count as usize] = (x, y);
+        self.count += 1;
+    }
+}
+
 impl Boxes {
     fn new() -> Self {
         Boxes {
@@ -199,6 +224,7 @@ pub struct Game {
     width: u8,
     height: u8,
     boxes: Boxes,
+    goals: Goals,
 }
 
 impl Game {
@@ -238,8 +264,8 @@ impl Game {
         let mut tiles = [[Tile::Floor; MAX_SIZE]; MAX_SIZE];
         let mut player_pos = None;
         let mut boxes = Boxes::new();
+        let mut goals = Goals::new();
         let mut empty_goals: u8 = 0;
-        let mut goal_count: u8 = 0;
 
         for (y, line) in lines.iter().enumerate() {
             for (x, ch) in line.chars().enumerate() {
@@ -248,7 +274,7 @@ impl Game {
                     ' ' => tiles[y][x] = Tile::Floor,
                     '.' => {
                         tiles[y][x] = Tile::Goal;
-                        goal_count += 1;
+                        goals.add(x as u8, y as u8);
                         empty_goals += 1;
                     }
                     '$' => {
@@ -257,8 +283,8 @@ impl Game {
                     }
                     '*' => {
                         tiles[y][x] = Tile::Goal;
+                        goals.add(x as u8, y as u8);
                         boxes.add(x as u8, y as u8);
-                        goal_count += 1;
                     }
                     '@' => {
                         tiles[y][x] = Tile::Floor;
@@ -273,7 +299,7 @@ impl Game {
                             return Err("Multiple players found".to_string());
                         }
                         player_pos = Some((x as u8, y as u8));
-                        goal_count += 1;
+                        goals.add(x as u8, y as u8);
                         empty_goals += 1;
                     }
                     _ => {
@@ -289,10 +315,10 @@ impl Game {
         let player_pos = player_pos.ok_or("No player found on board")?;
 
         // Validate that the number of goals matches the number of boxes
-        if goal_count != boxes.count {
+        if goals.count != boxes.count {
             return Err(format!(
                 "Goal count ({}) does not match box count ({})",
-                goal_count, boxes.count
+                goals.count, boxes.count
             ));
         }
 
@@ -303,6 +329,7 @@ impl Game {
             width: width as u8,
             height: height as u8,
             boxes,
+            goals,
         })
     }
 
@@ -314,8 +341,16 @@ impl Game {
         self.boxes.count as usize
     }
 
-    pub fn box_position(&self, index: usize) -> (u8, u8) {
+    pub fn box_pos(&self, index: usize) -> (u8, u8) {
         self.boxes.positions[index]
+    }
+
+    pub fn goal_count(&self) -> usize {
+        self.goals.count as usize
+    }
+
+    pub fn goal_pos(&self, index: usize) -> (u8, u8) {
+        self.goals.positions[index]
     }
 
     /// Move from position (x, y) in the given direction.

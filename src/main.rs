@@ -1,10 +1,12 @@
 mod game;
+mod heuristic;
 mod levels;
 mod solver;
 mod zobrist;
 
 use clap::Parser;
 use game::Game;
+use heuristic::GreedyHeuristic;
 use levels::Levels;
 use solver::Solver;
 use std::time::Instant;
@@ -38,7 +40,8 @@ fn solve_level(
     print_solution_flag: bool,
     max_nodes_explored: usize,
 ) {
-    let mut solver = Solver::new(max_nodes_explored);
+    let heuristic = GreedyHeuristic::new();
+    let mut solver = Solver::new(max_nodes_explored, heuristic);
     let start = Instant::now();
     let result = solver.solve(game);
     let elapsed = start.elapsed();
