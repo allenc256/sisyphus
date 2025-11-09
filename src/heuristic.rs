@@ -10,7 +10,22 @@ pub trait Heuristic {
     fn compute(&self, game: &Game) -> usize;
 }
 
+pub struct NullHeuristic;
+
+impl NullHeuristic {
+    pub fn new() -> Self {
+        NullHeuristic
+    }
+}
+
+impl Heuristic for NullHeuristic {
+    fn compute(&self, _game: &Game) -> usize {
+        0
+    }
+}
+
 /// A heuristic based on greedy matching of boxes to goals using Manhattan distance.
+/// This heuristic is not admissible, so using it may produce sub-optimal solutions.
 pub struct GreedyHeuristic;
 
 impl GreedyHeuristic {

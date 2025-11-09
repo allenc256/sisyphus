@@ -4,12 +4,20 @@ mod levels;
 mod solver;
 mod zobrist;
 
-use clap::Parser;
+use clap::{Parser, ValueEnum};
 use game::Game;
-use heuristic::GreedyHeuristic;
+use heuristic::{GreedyHeuristic, Heuristic, NullHeuristic};
 use levels::Levels;
 use solver::Solver;
 use std::time::Instant;
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum HeuristicType {
+    /// Greedy matching heuristic using Manhattan distance (default)
+    Greedy,
+    /// Null heuristic (no heuristic guidance)
+    Null,
+}
 
 fn print_solution(game: &Game, solution: &[game::Push]) {
     println!();
@@ -34,13 +42,13 @@ fn print_solution(game: &Game, solution: &[game::Push]) {
     }
 }
 
-fn solve_level(
+fn solve_level_with_heuristic<H: Heuristic>(
     level_num: usize,
     game: &Game,
     print_solution_flag: bool,
     max_nodes_explored: usize,
+    heuristic: H,
 ) {
-    let heuristic = GreedyHeuristic::new();
     let mut solver = Solver::new(max_nodes_explored, heuristic);
     let start = Instant::now();
     let result = solver.solve(game);
@@ -60,6 +68,35 @@ fn solve_level(
     if solution_len > 0 && print_solution_flag {
         let solution = result.unwrap();
         print_solution(game, &solution);
+    }
+}
+
+fn solve_level(
+    level_num: usize,
+    game: &Game,
+    print_solution_flag: bool,
+    max_nodes_explored: usize,
+    heuristic_type: HeuristicType,
+) {
+    match heuristic_type {
+        HeuristicType::Greedy => {
+            solve_level_with_heuristic(
+                level_num,
+                game,
+                print_solution_flag,
+                max_nodes_explored,
+                GreedyHeuristic::new(),
+            )
+        }
+        HeuristicType::Null => {
+            solve_level_with_heuristic(
+                level_num,
+                game,
+                print_solution_flag,
+                max_nodes_explored,
+                NullHeuristic::new(),
+            )
+        }
     }
 }
 
@@ -86,6 +123,10 @@ struct Args {
     /// Maximum number of nodes to explore before giving up
     #[arg(short = 'n', long, default_value = "5000000")]
     max_nodes_explored: usize,
+
+    /// Heuristic to use for solving
+    #[arg(short = 'H', long, value_enum, default_value = "greedy")]
+    heuristic: HeuristicType,
 }
 
 fn main() {
@@ -131,6 +172,7 @@ fn main() {
             game,
             args.print_solution,
             args.max_nodes_explored,
+            args.heuristic,
         );
     }
 }

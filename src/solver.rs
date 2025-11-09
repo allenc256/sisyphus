@@ -4,11 +4,12 @@ use crate::zobrist::Zobrist;
 use std::collections::HashMap;
 
 /// Result of an IDA* search iteration
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SearchResult {
     /// Solution found
     Found,
-    /// No solution at this threshold, but found states with this minimum f-cost
-    Exceeded(usize),
+    /// No solution at this threshold
+    Exceeded,
     /// Node limit exceeded
     Cutoff,
 }
@@ -59,8 +60,8 @@ impl<H: Heuristic> Solver<H> {
                 SearchResult::Found => {
                     return Some(solution);
                 }
-                SearchResult::Exceeded(next_threshold) => {
-                    threshold = next_threshold;
+                SearchResult::Exceeded => {
+                    threshold += 1;
                 }
                 SearchResult::Cutoff => {
                     return None;
@@ -98,9 +99,9 @@ impl<H: Heuristic> Solver<H> {
         let h_cost = self.heuristic.compute(game);
         let f_cost = g_cost + h_cost;
 
-        // If f-cost exceeds threshold, return it as a candidate for next threshold
+        // If f-cost exceeds threshold, stop searching this branch
         if f_cost > threshold {
-            return SearchResult::Exceeded(f_cost);
+            return SearchResult::Exceeded;
         }
 
         // Check if solved
@@ -118,14 +119,12 @@ impl<H: Heuristic> Solver<H> {
         if let Some(&prev_g_cost) = self.table.get(&full_hash) {
             // Skip if we've seen this state at a shallower or equal g-cost
             if g_cost >= prev_g_cost {
-                return SearchResult::Exceeded(usize::MAX);
+                return SearchResult::Exceeded;
             }
         }
 
         // Mark this state as visited
         self.table.insert(full_hash, g_cost);
-
-        let mut min_exceeded = usize::MAX;
 
         // Try each push
         for push in &pushes {
@@ -141,25 +140,20 @@ impl<H: Heuristic> Solver<H> {
                 ^ self.zobrist.box_hash(old_box_pos.0, old_box_pos.1)
                 ^ self.zobrist.box_hash(new_box_pos.0, new_box_pos.1);
 
-            match self.search(game, solution, g_cost + 1, threshold, new_boxes_hash) {
-                SearchResult::Found => {
-                    return SearchResult::Found;
-                }
-                SearchResult::Exceeded(t) => {
-                    min_exceeded = min_exceeded.min(t);
-                }
-                SearchResult::Cutoff => {
-                    game.unpush(push);
-                    solution.pop();
-                    return SearchResult::Cutoff;
-                }
+            let result = self.search(game, solution, g_cost + 1, threshold, new_boxes_hash);
+            if result == SearchResult::Found {
+                return SearchResult::Found;
             }
 
             game.unpush(push);
             solution.pop();
+
+            if result == SearchResult::Cutoff {
+                return SearchResult::Cutoff;
+            }
         }
 
-        SearchResult::Exceeded(min_exceeded)
+        SearchResult::Exceeded
     }
 }
 
