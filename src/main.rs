@@ -13,9 +13,7 @@ use std::time::Instant;
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
 enum HeuristicType {
-    /// Greedy matching heuristic using Manhattan distance (default)
     Greedy,
-    /// Null heuristic (no heuristic guidance)
     Null,
 }
 
@@ -79,24 +77,20 @@ fn solve_level(
     heuristic_type: HeuristicType,
 ) {
     match heuristic_type {
-        HeuristicType::Greedy => {
-            solve_level_with_heuristic(
-                level_num,
-                game,
-                print_solution_flag,
-                max_nodes_explored,
-                GreedyHeuristic::new(),
-            )
-        }
-        HeuristicType::Null => {
-            solve_level_with_heuristic(
-                level_num,
-                game,
-                print_solution_flag,
-                max_nodes_explored,
-                NullHeuristic::new(),
-            )
-        }
+        HeuristicType::Greedy => solve_level_with_heuristic(
+            level_num,
+            game,
+            print_solution_flag,
+            max_nodes_explored,
+            GreedyHeuristic::new(),
+        ),
+        HeuristicType::Null => solve_level_with_heuristic(
+            level_num,
+            game,
+            print_solution_flag,
+            max_nodes_explored,
+            NullHeuristic::new(),
+        ),
     }
 }
 

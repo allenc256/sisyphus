@@ -58,6 +58,7 @@ impl<H: Heuristic> Solver<H> {
 
             match self.search(&mut game.clone(), &mut solution, 0, threshold, boxes_hash) {
                 SearchResult::Found => {
+                    self.verify_solution(game, &solution);
                     return Some(solution);
                 }
                 SearchResult::Exceeded => {
@@ -77,6 +78,18 @@ impl<H: Heuristic> Solver<H> {
 
     pub fn nodes_explored(&self) -> usize {
         self.nodes_explored
+    }
+
+    fn verify_solution(&self, game: &Game, solution: &[Push]) {
+        let mut test_game = game.clone();
+        for push in solution.iter() {
+            test_game.push(*push);
+        }
+        assert!(
+            test_game.is_solved(),
+            "Solution verification failed: after {} pushes, puzzle is not solved",
+            solution.len()
+        );
     }
 
     /// IDA* search function
