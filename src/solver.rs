@@ -3,14 +3,16 @@ use crate::zobrist::{TranspositionTable, Zobrist};
 
 pub struct Solver {
     nodes_explored: usize,
+    max_nodes_explored: usize,
     tpn_table: TranspositionTable,
     zobrist: Zobrist,
 }
 
 impl Solver {
-    pub fn new() -> Self {
+    pub fn new(max_nodes_explored: usize) -> Self {
         Solver {
             nodes_explored: 0,
+            max_nodes_explored,
             tpn_table: TranspositionTable::new(),
             zobrist: Zobrist::new(),
         }
@@ -58,6 +60,11 @@ impl Solver {
         boxes_hash: u64,
     ) -> bool {
         self.nodes_explored += 1;
+
+        // Check if we've exceeded the node limit
+        if self.nodes_explored > self.max_nodes_explored {
+            return false;
+        }
 
         // Check if solved
         if game.is_solved() {
@@ -114,7 +121,7 @@ impl Solver {
 
 impl Default for Solver {
     fn default() -> Self {
-        Self::new()
+        Self::new(5000000)
     }
 }
 
@@ -129,7 +136,7 @@ mod tests {
                      ####";
         let game = Game::from_text(input).unwrap();
 
-        let mut solver = Solver::new();
+        let mut solver = Solver::new(5000000);
         let solution = solver.solve(&game);
 
         assert!(solution.is_some());
@@ -151,7 +158,7 @@ mod tests {
                      ####";
         let game = Game::from_text(input).unwrap();
 
-        let mut solver = Solver::new();
+        let mut solver = Solver::new(5000000);
         let solution = solver.solve(&game);
 
         assert!(solution.is_some());
@@ -165,7 +172,7 @@ mod tests {
                      #####";
         let game = Game::from_text(input).unwrap();
 
-        let mut solver = Solver::new();
+        let mut solver = Solver::new(5000000);
         let solution = solver.solve(&game);
 
         assert!(solution.is_some());
