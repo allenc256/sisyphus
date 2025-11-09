@@ -353,12 +353,33 @@ impl Game {
         self.goals.positions[index]
     }
 
+    /// Get the box index at the given position, if any.
+    /// Returns Some(box_index) if there is a box at (x, y), None otherwise.
+    pub fn box_at(&self, x: u8, y: u8) -> Option<u8> {
+        let idx = self.boxes.index[y as usize][x as usize];
+        if idx == 255 { None } else { Some(idx) }
+    }
+
     /// Move from position (x, y) in the given direction.
     /// Returns Some((new_x, new_y)) if the new position is within bounds, None otherwise.
     fn move_pos(&self, x: u8, y: u8, dir: Direction) -> Option<(u8, u8)> {
         let (dx, dy) = dir.delta();
         let new_x = x as i32 + dx as i32;
         let new_y = y as i32 + dy as i32;
+
+        if new_x >= 0 && new_y >= 0 && new_x < self.width as i32 && new_y < self.height as i32 {
+            Some((new_x as u8, new_y as u8))
+        } else {
+            None
+        }
+    }
+
+    /// Move from position (x, y) in the opposite direction of dir.
+    /// Returns Some((new_x, new_y)) if the new position is within bounds, None otherwise.
+    fn unmove_pos(&self, x: u8, y: u8, dir: Direction) -> Option<(u8, u8)> {
+        let (dx, dy) = dir.delta();
+        let new_x = x as i32 - dx as i32;
+        let new_y = y as i32 - dy as i32;
 
         if new_x >= 0 && new_y >= 0 && new_x < self.width as i32 && new_y < self.height as i32 {
             Some((new_x as u8, new_y as u8))
@@ -378,9 +399,9 @@ impl Game {
         );
 
         let (x, y) = self.boxes.positions[push.box_index as usize];
-        let (dx, dy) = push.direction.delta();
-        let new_x = (x as i8 + dx) as u8;
-        let new_y = (y as i8 + dy) as u8;
+        let (new_x, new_y) = self
+            .move_pos(x, y, push.direction)
+            .expect("Push destination out of bounds");
 
         let dest_tile = self.get_tile(new_x, new_y);
         assert!(
@@ -423,13 +444,14 @@ impl Game {
         let (new_x, new_y) = self.boxes.positions[push.box_index as usize];
 
         // Calculate where box came from (opposite direction)
-        let (dx, dy) = push.direction.delta();
-        let old_x = (new_x as i8 - dx) as u8;
-        let old_y = (new_y as i8 - dy) as u8;
+        let (old_x, old_y) = self
+            .unmove_pos(new_x, new_y, push.direction)
+            .expect("Unpush source out of bounds");
 
         // Calculate where player was before the push
-        let player_old_x = (old_x as i8 - dx) as u8;
-        let player_old_y = (old_y as i8 - dy) as u8;
+        let (player_old_x, player_old_y) = self
+            .unmove_pos(old_x, old_y, push.direction)
+            .expect("Unpush player position out of bounds");
 
         let current_tile = self.get_tile(new_x, new_y);
         let old_tile = self.get_tile(old_x, old_y);
@@ -479,8 +501,7 @@ impl Game {
             for &dir in &ALL_DIRECTIONS {
                 if let Some((nx, ny)) = self.move_pos(x, y, dir) {
                     // If there's a box, check if we can push it
-                    let box_idx = self.boxes.index[ny as usize][nx as usize];
-                    if box_idx != 255 {
+                    if let Some(box_idx) = self.box_at(nx, ny) {
                         // Check if destination is free
                         if let Some((dest_x, dest_y)) = self.move_pos(nx, ny, dir) {
                             let dest_tile = self.get_tile(dest_x, dest_y);
@@ -488,6 +509,68 @@ impl Game {
                                 && (dest_tile == Tile::Floor || dest_tile == Tile::Goal)
                             {
                                 // Valid push
+                                pushes.add(box_idx, dir);
+                            }
+                        }
+                    } else {
+                        let tile = self.get_tile(nx, ny);
+                        if (tile == Tile::Floor || tile == Tile::Goal)
+                            && !reachable[ny as usize][nx as usize]
+                        {
+                            // Continue DFS to this floor/goal tile
+                            reachable[ny as usize][nx as usize] = true;
+
+                            // Update canonical position if this is lexicographically smaller
+                            if (nx, ny) < canonical_pos {
+                                canonical_pos = (nx, ny);
+                            }
+
+                            stack[stack_size] = (nx, ny);
+                            stack_size += 1;
+                        }
+                    }
+                }
+            }
+        }
+
+        (pushes, canonical_pos)
+    }
+
+    /// Compute all possible unpushes from the current game state.
+    /// An unpush reverses a push operation - useful for backward search from goal states.
+    /// Returns the unpushes and the canonicalized (lexicographically smallest) player position.
+    pub fn compute_unpushes(&self) -> (Pushes, (u8, u8)) {
+        let mut pushes = Pushes::new();
+        let mut reachable = [[false; MAX_SIZE]; MAX_SIZE];
+        let mut canonical_pos = self.player;
+
+        // Stack-allocated stack for DFS
+        let mut stack: [(u8, u8); MAX_SIZE * MAX_SIZE] = [(0, 0); MAX_SIZE * MAX_SIZE];
+        let mut stack_size = 0;
+
+        // DFS from player position to find all reachable positions
+        stack[stack_size] = self.player;
+        stack_size += 1;
+        reachable[self.player.1 as usize][self.player.0 as usize] = true;
+
+        while stack_size > 0 {
+            stack_size -= 1;
+            let (x, y) = stack[stack_size];
+
+            // Check all 4 directions
+            for &dir in &ALL_DIRECTIONS {
+                if let Some((nx, ny)) = self.move_pos(x, y, dir) {
+                    // If there's a box, check if we can unpush it
+                    if let Some(box_idx) = self.box_at(nx, ny) {
+                        // Box at (nx, ny), player at (x, y)
+                        // For unpush: box moves to (x, y), player moves to (x, y) - dir
+                        // Check if player destination is free
+                        if let Some((dest_x, dest_y)) = self.unmove_pos(x, y, dir) {
+                            let dest_tile = self.get_tile(dest_x, dest_y);
+                            if !self.boxes.has_box_at(dest_x, dest_y)
+                                && (dest_tile == Tile::Floor || dest_tile == Tile::Goal)
+                            {
+                                // Valid unpush
                                 pushes.add(box_idx, dir);
                             }
                         }
@@ -930,6 +1013,25 @@ mod tests {
         // Check canonical position - should be lexicographically smallest reachable position
         // Player starts at (2, 3) and can reach many positions including (1, 1)
         assert_eq!(canonical_pos, (1, 1));
+    }
+
+    #[test]
+    fn test_compute_unpushes() {
+        // Test with a box that could have been pushed from the left
+        let input = "#####\n\
+                     # $+ #\n\
+                     #####";
+        let game = Game::from_text(input).unwrap();
+        let (unpushes, canonical_pos) = game.compute_unpushes();
+        let actual = unpushes.iter().collect::<Vec<_>>();
+        assert_eq!(
+            actual,
+            vec![Push {
+                box_index: 0,
+                direction: Direction::Left
+            }]
+        );
+        assert_eq!(canonical_pos, (3, 1));
     }
 
     #[test]

@@ -80,6 +80,9 @@ impl<H: Heuristic> Solver<H> {
         self.nodes_explored
     }
 
+    // This verification is pretty basic. A proper verification should verify
+    // that all moves are indeed valid (i.e., the player can actually make the
+    // claimed pushes).
     fn verify_solution(&self, game: &Game, solution: &[Push]) {
         let mut test_game = game.clone();
         for push in solution.iter() {
