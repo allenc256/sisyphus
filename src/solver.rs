@@ -1,10 +1,10 @@
 use crate::game::{Game, Push};
-use crate::zobrist::{TranspositionTable, Zobrist};
+use crate::zobrist::{TpnTable, Zobrist};
 
 pub struct Solver {
     nodes_explored: usize,
     max_nodes_explored: usize,
-    tpn_table: TranspositionTable,
+    tpn_table: TpnTable,
     zobrist: Zobrist,
 }
 
@@ -13,7 +13,7 @@ impl Solver {
         Solver {
             nodes_explored: 0,
             max_nodes_explored,
-            tpn_table: TranspositionTable::new(),
+            tpn_table: TpnTable::new(),
             zobrist: Zobrist::new(),
         }
     }
@@ -28,7 +28,8 @@ impl Solver {
         let mut solution = Vec::new();
 
         // Iterative deepening: try increasing depth limits
-        for max_depth in 0..=100 {
+        let mut max_depth = 0;
+        loop {
             solution.clear();
             self.tpn_table.clear();
 
@@ -42,9 +43,14 @@ impl Solver {
             if self.dfs(&mut game.clone(), &mut solution, 0, max_depth, boxes_hash) {
                 return Some(solution);
             }
-        }
 
-        None
+            // If we've exceeded max nodes, give up
+            if self.nodes_explored > self.max_nodes_explored {
+                return None;
+            }
+
+            max_depth += 1;
+        }
     }
 
     pub fn nodes_explored(&self) -> usize {
@@ -78,9 +84,6 @@ impl Solver {
 
         // Get all valid pushes and canonical position
         let (pushes, canonical_pos) = game.compute_pushes();
-
-        // Set player to canonical position
-        game.set_player_pos(canonical_pos.0, canonical_pos.1);
 
         // Hash in the canonical player position
         let full_hash = boxes_hash ^ self.zobrist.player_hash(canonical_pos.0, canonical_pos.1);

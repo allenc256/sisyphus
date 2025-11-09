@@ -46,13 +46,13 @@ impl Zobrist {
 }
 
 /// Transposition table for storing visited states
-pub struct TranspositionTable {
+pub struct TpnTable {
     visited: HashMap<u64, usize>, // Maps hash to depth at which it was first visited
 }
 
-impl TranspositionTable {
+impl TpnTable {
     pub fn new() -> Self {
-        TranspositionTable {
+        TpnTable {
             visited: HashMap::new(),
         }
     }
@@ -85,7 +85,7 @@ mod tests {
 
     #[test]
     fn test_transposition_table_insert_and_check() {
-        let mut tt = TranspositionTable::new();
+        let mut tt = TpnTable::new();
         let hash = 0x123456789abcdef0u64;
 
         // First visit at depth 5

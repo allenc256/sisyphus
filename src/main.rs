@@ -47,7 +47,7 @@ fn solve_level(
 
     println!(
         "level: {:<3}  solved: {}  steps: {:<3}  states: {:<10}  elapsed: {} ms",
-        level_num + 1,
+        level_num,
         solved,
         solution_len,
         solver.nodes_explored(),

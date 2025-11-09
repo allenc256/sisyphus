@@ -306,10 +306,6 @@ impl Game {
         })
     }
 
-    pub fn set_player_pos(&mut self, x: u8, y: u8) {
-        self.player = (x, y);
-    }
-
     pub fn get_tile(&self, x: u8, y: u8) -> Tile {
         self.tiles[y as usize][x as usize]
     }
