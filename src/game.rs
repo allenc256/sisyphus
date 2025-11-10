@@ -515,6 +515,10 @@ impl Game {
     /// Compute the canonical (lexicographically smallest reachable) player position.
     /// If player position is Unknown, returns Unknown.
     pub fn canonical_player_pos(&self) -> PlayerPos {
+        if self.is_solved() {
+            return PlayerPos::Unknown;
+        }
+
         match self.player {
             PlayerPos::Known(x, y) => {
                 let mut reachable = [[false; MAX_SIZE]; MAX_SIZE];
@@ -528,8 +532,14 @@ impl Game {
     /// Compute all possible box pushes from the current game state.
     /// Uses a single DFS from player position to find all reachable boxes.
     /// Returns the pushes and the canonicalized (lexicographically smallest) player position.
-    /// Panics if the player position is Unknown.
-    pub fn compute_pushes(&self) -> (Pushes, (u8, u8)) {
+    /// If the game is already solved, returns empty pushes and Unknown player position.
+    /// Panics if the player position is Unknown (and game is not solved).
+    pub fn compute_pushes(&self) -> (Pushes, PlayerPos) {
+        // Short-circuit if already solved
+        if self.is_solved() {
+            return (Pushes::new(), PlayerPos::Unknown);
+        }
+
         let PlayerPos::Known(x, y) = self.player else {
             panic!("Cannot compute pushes when player position is unknown");
         };
@@ -548,50 +558,45 @@ impl Game {
                 }
             }
         });
-        (pushes, canonical_pos)
+        (pushes, PlayerPos::Known(canonical_pos.0, canonical_pos.1))
     }
 
     /// Compute all possible unpushes from the current game state.
     /// An unpush reverses a push operation - useful for backward search from goal states.
     /// Returns the unpushes and the canonicalized (lexicographically smallest) player position.
-    /// Panics if the player position is Unknown.
-    pub fn compute_unpushes(&self) -> (Pushes, (u8, u8)) {
-        let PlayerPos::Known(x, y) = self.player else {
-            panic!("Cannot compute unpushes when player position is unknown");
-        };
-
+    /// If player position is Unknown, computes unpushes from all possible player positions
+    /// and returns Unknown as the canonical position.
+    pub fn compute_unpushes(&self) -> (Pushes, PlayerPos) {
         let mut pushes = Pushes::new();
         let mut reachable = [[false; MAX_SIZE]; MAX_SIZE];
-        let canonical_pos = self.compute_unpushes_helper((x, y), &mut reachable, &mut pushes);
-        (pushes, canonical_pos)
-    }
 
-    /// Compute all possible unpushes from all possible player positions.
-    /// Used for backward search when the final player position is unknown.
-    /// Returns all unpushes that could lead to the current box configuration.
-    pub fn compute_initial_unpushes(&self) -> Pushes {
-        assert!(self.player == PlayerPos::Unknown);
+        match self.player {
+            PlayerPos::Known(x, y) => {
+                let canonical_pos =
+                    self.compute_unpushes_helper((x, y), &mut reachable, &mut pushes);
+                (pushes, PlayerPos::Known(canonical_pos.0, canonical_pos.1))
+            }
+            PlayerPos::Unknown => {
+                assert!(self.is_solved());
+                // Try each position as a potential player position
+                for y in 0..self.height {
+                    for x in 0..self.width {
+                        // Skip if already explored from a previous position
+                        if reachable[y as usize][x as usize] {
+                            continue;
+                        }
 
-        let mut all_pushes = Pushes::new();
-        let mut reachable = [[false; MAX_SIZE]; MAX_SIZE];
-
-        // Try each position as a potential player position
-        for y in 0..self.height {
-            for x in 0..self.width {
-                // Skip if already explored from a previous position
-                if reachable[y as usize][x as usize] {
-                    continue;
+                        let tile = self.get_tile(x, y);
+                        if (tile == Tile::Floor || tile == Tile::Goal)
+                            && !self.boxes.has_box_at(x, y)
+                        {
+                            self.compute_unpushes_helper((x, y), &mut reachable, &mut pushes);
+                        }
+                    }
                 }
-
-                let tile = self.get_tile(x, y);
-                // Player can only be on floor or goal tiles, and not where a box is
-                if (tile == Tile::Floor || tile == Tile::Goal) && !self.boxes.has_box_at(x, y) {
-                    self.compute_unpushes_helper((x, y), &mut reachable, &mut all_pushes);
-                }
+                (pushes, PlayerPos::Unknown)
             }
         }
-
-        all_pushes
     }
 
     fn compute_unpushes_helper(
@@ -1089,7 +1094,7 @@ mod tests {
 
         // Check canonical position - should be lexicographically smallest reachable position
         // Player starts at (2, 3) and can reach many positions including (1, 1)
-        assert_eq!(canonical_pos, (1, 1));
+        assert_eq!(canonical_pos, PlayerPos::Known(1, 1));
     }
 
     #[test]
@@ -1108,7 +1113,7 @@ mod tests {
                 direction: Direction::Left
             }]
         );
-        assert_eq!(canonical_pos, (3, 1));
+        assert_eq!(canonical_pos, PlayerPos::Known(3, 1));
     }
 
     #[test]
@@ -1118,7 +1123,7 @@ mod tests {
                      #######";
         let mut game = Game::from_text(input).unwrap();
         game.set_to_goal_state();
-        let unpushes = game.compute_initial_unpushes();
+        let (unpushes, canonical_pos) = game.compute_unpushes();
         let mut actual = unpushes.iter().collect::<Vec<_>>();
         actual.sort();
 
@@ -1133,6 +1138,7 @@ mod tests {
             },
         ];
         expected.sort();
+        assert_eq!(canonical_pos, PlayerPos::Unknown);
         assert_eq!(actual, expected);
     }
 

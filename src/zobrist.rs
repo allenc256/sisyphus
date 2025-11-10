@@ -1,4 +1,4 @@
-use crate::game::MAX_SIZE;
+use crate::game::{MAX_SIZE, PlayerPos};
 use rand::{RngCore, SeedableRng};
 use rand_chacha::ChaCha8Rng;
 
@@ -6,6 +6,7 @@ use rand_chacha::ChaCha8Rng;
 pub struct Zobrist {
     box_hashes: [[u64; MAX_SIZE]; MAX_SIZE],
     player_hashes: [[u64; MAX_SIZE]; MAX_SIZE],
+    player_unknown_hash: u64,
 }
 
 impl Zobrist {
@@ -27,9 +28,12 @@ impl Zobrist {
             }
         }
 
+        let player_unknown_hash = rng.next_u64();
+
         Zobrist {
             box_hashes,
             player_hashes,
+            player_unknown_hash,
         }
     }
 
@@ -38,9 +42,11 @@ impl Zobrist {
         self.box_hashes[y as usize][x as usize]
     }
 
-    /// Get hash value for player at a specific position
-    pub fn player_hash(&self, x: u8, y: u8) -> u64 {
-        self.player_hashes[y as usize][x as usize]
+    /// Get hash value for player position
+    pub fn player_hash(&self, pos: PlayerPos) -> u64 {
+        match pos {
+            PlayerPos::Known(x, y) => self.player_hashes[y as usize][x as usize],
+            PlayerPos::Unknown => self.player_unknown_hash,
+        }
     }
 }
-

@@ -1,5 +1,5 @@
-use crate::game::{Game, Push};
-use crate::heuristic::Heuristic;
+use crate::game::{Game, PlayerPos, Push, Pushes};
+use crate::heuristic::{self, Heuristic};
 use crate::zobrist::Zobrist;
 use std::collections::HashMap;
 
@@ -54,12 +54,101 @@ impl<H: Heuristic> Searcher<H> {
         self.table.clear();
     }
 
+    fn compute_heuristic(&self, game: &Game) -> usize {
+        self.heuristic.compute_forward(game)
+    }
+
+    fn compute_moves(&self, game: &Game) -> (Pushes, PlayerPos) {
+        game.compute_pushes()
+    }
+
+    fn apply_move(&self, game: &mut Game, push: Push) -> ((u8, u8), (u8, u8)) {
+        let old_box_pos = game.box_pos(push.box_index as usize);
+        game.push(push);
+        let new_box_pos = game.box_pos(push.box_index as usize);
+        (old_box_pos, new_box_pos)
+    }
+
+    fn unapply_move(&self, game: &mut Game, push: Push) {
+        game.unpush(push)
+    }
+
+    fn is_terminal(&self, game: &Game) -> bool {
+        game.is_solved()
+    }
+
+    /// Compute the hash for a game state (boxes hash XOR canonical player position hash)
+    fn compute_hash(&self, game: &Game) -> u64 {
+        let mut boxes_hash = 0u64;
+        for box_idx in 0..game.box_count() {
+            let (x, y) = game.box_pos(box_idx);
+            boxes_hash ^= self.zobrist.box_hash(x, y);
+        }
+        let canonical_pos = game.canonical_player_pos();
+        boxes_hash ^ self.zobrist.player_hash(canonical_pos)
+    }
+
+    /// Reconstruct solution by following parent_hash links backwards from final state
+    /// Panics if solution reconstruction fails
+    fn reconstruct_solution(&self, final_game: &Game) -> Vec<Push> {
+        let mut solution = Vec::new();
+        let mut current_game = final_game.clone();
+        let mut current_hash = self.compute_hash(&current_game);
+
+        // Work backwards until we reach the initial state (g_cost == 0)
+        loop {
+            let entry = self
+                .table
+                .get(&current_hash)
+                .expect("Failed to reconstruct solution: state not in transposition table");
+
+            if entry.g_cost == 0 {
+                // Reached initial state
+                break;
+            }
+
+            let target_parent_hash = entry.parent_hash;
+
+            // Compute all possible unpushes from current state
+            let (unpushes, _canonical_pos) = current_game.compute_unpushes();
+
+            // Try each unpush to find which one leads to parent state
+            let mut found = false;
+            for unpush in &unpushes {
+                current_game.unpush(unpush);
+
+                // Compute hash of this previous state
+                let prev_hash = self.compute_hash(&current_game);
+
+                // Check if this matches the parent we're looking for
+                if prev_hash == target_parent_hash {
+                    // This is the correct unpush (which was a push in forward direction)
+                    solution.push(unpush);
+                    current_hash = prev_hash;
+                    found = true;
+                    break;
+                }
+
+                // Redo the unpush if it wasn't correct
+                current_game.push(unpush);
+            }
+
+            assert!(
+                found,
+                "Failed to reconstruct solution: no unpush leads to parent state"
+            );
+        }
+
+        // Reverse solution since we built it backwards
+        solution.reverse();
+        solution
+    }
+
     /// Perform DFS A* search up to the specified threshold
-    /// Returns SearchResult and modifies solution in place if found
+    /// Returns SearchResult. If found, use reconstruct_solution to get the solution path.
     fn search(
         &mut self,
         game: &mut Game,
-        solution: &mut Vec<Push>,
         g_cost: usize,
         threshold: usize,
         boxes_hash: u64,
@@ -73,7 +162,7 @@ impl<H: Heuristic> Searcher<H> {
         }
 
         // Compute heuristic and f-cost
-        let h_cost = self.heuristic.compute_forward(game);
+        let h_cost = self.compute_heuristic(game);
         let f_cost = g_cost + h_cost;
 
         // If f-cost exceeds threshold, stop searching this branch
@@ -81,16 +170,11 @@ impl<H: Heuristic> Searcher<H> {
             return SearchResult::Exceeded;
         }
 
-        // Check if solved
-        if game.is_solved() {
-            return SearchResult::Found;
-        }
-
         // Get all valid pushes and canonical position
-        let (pushes, canonical_pos) = game.compute_pushes();
+        let (pushes, canonical_pos) = self.compute_moves(game);
 
         // Hash in the canonical player position
-        let curr_hash = boxes_hash ^ self.zobrist.player_hash(canonical_pos.0, canonical_pos.1);
+        let curr_hash = boxes_hash ^ self.zobrist.player_hash(canonical_pos);
 
         // Check transposition table
         if let Some(entry) = self.table.get(&curr_hash) {
@@ -109,34 +193,26 @@ impl<H: Heuristic> Searcher<H> {
             },
         );
 
+        // Check if we've reached the target (after adding to transposition table)
+        if self.is_terminal(game) {
+            return SearchResult::Found;
+        }
+
         // Try each push
         for push in &pushes {
-            let old_box_pos = game.box_pos(push.box_index as usize);
-
-            solution.push(push);
-            game.push(push);
-
-            let new_box_pos = game.box_pos(push.box_index as usize);
+            let (old_box_pos, new_box_pos) = self.apply_move(game, push);
 
             // Update boxes hash (unhash old position, hash new position)
             let new_boxes_hash = boxes_hash
                 ^ self.zobrist.box_hash(old_box_pos.0, old_box_pos.1)
                 ^ self.zobrist.box_hash(new_box_pos.0, new_box_pos.1);
 
-            let result = self.search(
-                game,
-                solution,
-                g_cost + 1,
-                threshold,
-                new_boxes_hash,
-                curr_hash,
-            );
+            let result = self.search(game, g_cost + 1, threshold, new_boxes_hash, curr_hash);
             if result == SearchResult::Found {
-                return SearchResult::Found;
+                return result;
             }
 
-            game.unpush(push);
-            solution.pop();
+            self.unapply_move(game, push);
 
             if result == SearchResult::Cutoff {
                 return SearchResult::Cutoff;
@@ -161,8 +237,6 @@ impl<H: Heuristic> Solver<H> {
             return Some(Vec::new());
         }
 
-        let mut solution = Vec::new();
-
         // Initial hash: only hash box positions, not player
         let mut boxes_hash = 0u64;
         for box_idx in 0..game.box_count() {
@@ -171,21 +245,18 @@ impl<H: Heuristic> Solver<H> {
         }
 
         // IDA*: try increasing f-cost thresholds
-        let mut threshold = self.searcher.heuristic.compute_forward(game);
+        let mut threshold = self.searcher.compute_heuristic(game);
 
         loop {
-            solution.clear();
             self.searcher.reset();
+            let mut search_game = game.clone();
 
-            match self.searcher.search(
-                &mut game.clone(),
-                &mut solution,
-                0,
-                threshold,
-                boxes_hash,
-                0,
-            ) {
+            match self
+                .searcher
+                .search(&mut search_game, 0, threshold, boxes_hash, 0)
+            {
                 SearchResult::Found => {
+                    let solution = self.searcher.reconstruct_solution(&search_game);
                     self.verify_solution(game, &solution);
                     return Some(solution);
                 }
