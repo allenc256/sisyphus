@@ -1072,9 +1072,9 @@ mod tests {
 
     #[test]
     fn test_compute_initial_unpushes() {
-        let input = "######\n\
-                     #@ * #\n\
-                     ######";
+        let input = "#######\n\
+                     #@ *  #\n\
+                     #######";
         let game = Game::from_text(input).unwrap();
         let unpushes = game.compute_initial_unpushes();
         let mut actual = unpushes.iter().collect::<Vec<_>>();
