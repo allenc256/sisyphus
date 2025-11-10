@@ -10,6 +10,12 @@ pub enum Tile {
     Goal,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PlayerPos {
+    Known(u8, u8),
+    Unknown,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Direction {
     Up,
@@ -222,7 +228,7 @@ impl Boxes {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Game {
     tiles: [[Tile; MAX_SIZE]; MAX_SIZE],
-    player: (u8, u8),
+    player: PlayerPos,
     empty_goals: u8,
     width: u8,
     height: u8,
@@ -294,14 +300,14 @@ impl Game {
                         if player_pos.is_some() {
                             return Err("Multiple players found".to_string());
                         }
-                        player_pos = Some((x as u8, y as u8));
+                        player_pos = Some(PlayerPos::Known(x as u8, y as u8));
                     }
                     '+' => {
                         tiles[y][x] = Tile::Goal;
                         if player_pos.is_some() {
                             return Err("Multiple players found".to_string());
                         }
-                        player_pos = Some((x as u8, y as u8));
+                        player_pos = Some(PlayerPos::Known(x as u8, y as u8));
                         goals.add(x as u8, y as u8);
                         empty_goals += 1;
                     }
@@ -430,7 +436,7 @@ impl Game {
         self.boxes.move_box(x, y, new_x, new_y);
 
         // Update player position to where the box was
-        self.player = (x, y);
+        self.player = PlayerPos::Known(x, y);
     }
 
     /// Undo a push operation.
@@ -471,7 +477,7 @@ impl Game {
         self.boxes.move_box(new_x, new_y, old_x, old_y);
 
         // Restore player position
-        self.player = (player_old_x, player_old_y);
+        self.player = PlayerPos::Known(player_old_x, player_old_y);
     }
 
     /// Check if all boxes are on goals (win condition)
@@ -479,73 +485,79 @@ impl Game {
         self.empty_goals == 0
     }
 
+    /// Set the game state to the final/solved position where all boxes are on goals
+    /// and the player position is unknown. This is useful for backward search.
+    pub fn set_to_goal_state(&mut self) {
+        // Move all boxes to their corresponding goals
+        for i in 0..self.boxes.count as usize {
+            let current_pos = self.boxes.positions[i];
+            let goal_pos = self.goals.positions[i];
+
+            // Clear current position in index
+            self.boxes.index[current_pos.1 as usize][current_pos.0 as usize] = 255;
+            // Set new position
+            self.boxes.positions[i] = goal_pos;
+            self.boxes.index[goal_pos.1 as usize][goal_pos.0 as usize] = i as u8;
+        }
+
+        // Set empty_goals to 0 since all boxes are on goals
+        self.empty_goals = 0;
+
+        // Set player position to unknown
+        self.player = PlayerPos::Unknown;
+    }
+
+    /// Compute the canonical (lexicographically smallest reachable) player position.
+    /// If player position is Unknown, returns Unknown.
+    pub fn canonical_player_pos(&self) -> PlayerPos {
+        match self.player {
+            PlayerPos::Known(x, y) => {
+                let mut reachable = [[false; MAX_SIZE]; MAX_SIZE];
+                let (cx, cy) = self.player_dfs((x, y), &mut reachable, |_pos, _dir, _box_idx| {});
+                PlayerPos::Known(cx, cy)
+            }
+            PlayerPos::Unknown => PlayerPos::Unknown,
+        }
+    }
+
     /// Compute all possible box pushes from the current game state.
     /// Uses a single DFS from player position to find all reachable boxes.
     /// Returns the pushes and the canonicalized (lexicographically smallest) player position.
+    /// Panics if the player position is Unknown.
     pub fn compute_pushes(&self) -> (Pushes, (u8, u8)) {
+        let PlayerPos::Known(x, y) = self.player else {
+            panic!("Cannot compute pushes when player position is unknown");
+        };
+
         let mut pushes = Pushes::new();
         let mut reachable = [[false; MAX_SIZE]; MAX_SIZE];
-        let mut canonical_pos = self.player;
-
-        // Stack-allocated stack for DFS
-        let mut stack: [(u8, u8); MAX_SIZE * MAX_SIZE] = [(0, 0); MAX_SIZE * MAX_SIZE];
-        let mut stack_size = 0;
-
-        // DFS from player position to find all reachable positions
-        stack[stack_size] = self.player;
-        stack_size += 1;
-        reachable[self.player.1 as usize][self.player.0 as usize] = true;
-
-        while stack_size > 0 {
-            stack_size -= 1;
-            let (x, y) = stack[stack_size];
-
-            // Check all 4 directions for adjacent boxes
-            for &dir in &ALL_DIRECTIONS {
-                if let Some((nx, ny)) = self.move_pos(x, y, dir) {
-                    // If there's a box, check if we can push it
-                    if let Some(box_idx) = self.box_at(nx, ny) {
-                        // Check if destination is free
-                        if let Some((dest_x, dest_y)) = self.move_pos(nx, ny, dir) {
-                            let dest_tile = self.get_tile(dest_x, dest_y);
-                            if !self.boxes.has_box_at(dest_x, dest_y)
-                                && (dest_tile == Tile::Floor || dest_tile == Tile::Goal)
-                            {
-                                // Valid push
-                                pushes.add(box_idx, dir);
-                            }
-                        }
-                    } else {
-                        let tile = self.get_tile(nx, ny);
-                        if (tile == Tile::Floor || tile == Tile::Goal)
-                            && !reachable[ny as usize][nx as usize]
-                        {
-                            // Continue DFS to this floor/goal tile
-                            reachable[ny as usize][nx as usize] = true;
-
-                            // Update canonical position if this is lexicographically smaller
-                            if (nx, ny) < canonical_pos {
-                                canonical_pos = (nx, ny);
-                            }
-
-                            stack[stack_size] = (nx, ny);
-                            stack_size += 1;
-                        }
-                    }
+        let canonical_pos = self.player_dfs((x, y), &mut reachable, |_player_pos, dir, box_idx| {
+            // For pushes: check if the box can move forward in the direction
+            let box_pos = self.box_pos(box_idx as usize);
+            if let Some((dest_x, dest_y)) = self.move_pos(box_pos.0, box_pos.1, dir) {
+                let dest_tile = self.get_tile(dest_x, dest_y);
+                if !self.boxes.has_box_at(dest_x, dest_y)
+                    && (dest_tile == Tile::Floor || dest_tile == Tile::Goal)
+                {
+                    pushes.add(box_idx, dir);
                 }
             }
-        }
-
+        });
         (pushes, canonical_pos)
     }
 
     /// Compute all possible unpushes from the current game state.
     /// An unpush reverses a push operation - useful for backward search from goal states.
     /// Returns the unpushes and the canonicalized (lexicographically smallest) player position.
+    /// Panics if the player position is Unknown.
     pub fn compute_unpushes(&self) -> (Pushes, (u8, u8)) {
+        let PlayerPos::Known(x, y) = self.player else {
+            panic!("Cannot compute unpushes when player position is unknown");
+        };
+
         let mut pushes = Pushes::new();
         let mut reachable = [[false; MAX_SIZE]; MAX_SIZE];
-        let canonical_pos = self.compute_unpushes_helper(self.player, &mut reachable, &mut pushes);
+        let canonical_pos = self.compute_unpushes_helper((x, y), &mut reachable, &mut pushes);
         (pushes, canonical_pos)
     }
 
@@ -553,6 +565,8 @@ impl Game {
     /// Used for backward search when the final player position is unknown.
     /// Returns all unpushes that could lead to the current box configuration.
     pub fn compute_initial_unpushes(&self) -> Pushes {
+        assert!(self.player == PlayerPos::Unknown);
+
         let mut all_pushes = Pushes::new();
         let mut reachable = [[false; MAX_SIZE]; MAX_SIZE];
 
@@ -581,16 +595,43 @@ impl Game {
         reachable: &mut [[bool; MAX_SIZE]; MAX_SIZE],
         pushes: &mut Pushes,
     ) -> (u8, u8) {
-        let mut canonical_pos = player;
+        self.player_dfs(player, reachable, |(x, y), dir, box_idx| {
+            // For unpush: box at (nx, ny), player at (x, y)
+            // Box moves to (x, y), player moves to (x, y) - dir
+            // Check if player destination is free
+            if let Some((dest_x, dest_y)) = self.unmove_pos(x, y, dir) {
+                let dest_tile = self.get_tile(dest_x, dest_y);
+                if !self.boxes.has_box_at(dest_x, dest_y)
+                    && (dest_tile == Tile::Floor || dest_tile == Tile::Goal)
+                {
+                    pushes.add(box_idx, dir);
+                }
+            }
+        })
+    }
+
+    /// Generic DFS helper to find all reachable player positions.
+    /// Calls the `on_box` closure for each box adjacent to a reachable position.
+    /// The closure receives (player_pos, direction, box_idx) and can handle box move logic.
+    fn player_dfs<F>(
+        &self,
+        start_player: (u8, u8),
+        reachable: &mut [[bool; MAX_SIZE]; MAX_SIZE],
+        mut on_box: F,
+    ) -> (u8, u8)
+    where
+        F: FnMut((u8, u8), Direction, u8),
+    {
+        let mut canonical_pos = start_player;
 
         // Stack-allocated stack for DFS
         let mut stack: [(u8, u8); MAX_SIZE * MAX_SIZE] = [(0, 0); MAX_SIZE * MAX_SIZE];
         let mut stack_size = 0;
 
         // DFS from player position to find all reachable positions
-        stack[stack_size] = player;
+        stack[stack_size] = start_player;
         stack_size += 1;
-        reachable[player.1 as usize][player.0 as usize] = true;
+        reachable[start_player.1 as usize][start_player.0 as usize] = true;
 
         while stack_size > 0 {
             stack_size -= 1;
@@ -599,20 +640,9 @@ impl Game {
             // Check all 4 directions
             for &dir in &ALL_DIRECTIONS {
                 if let Some((nx, ny)) = self.move_pos(x, y, dir) {
-                    // If there's a box, check if we can unpush it
+                    // If there's a box, notify the closure
                     if let Some(box_idx) = self.box_at(nx, ny) {
-                        // Box at (nx, ny), player at (x, y)
-                        // For unpush: box moves to (x, y), player moves to (x, y) - dir
-                        // Check if player destination is free
-                        if let Some((dest_x, dest_y)) = self.unmove_pos(x, y, dir) {
-                            let dest_tile = self.get_tile(dest_x, dest_y);
-                            if !self.boxes.has_box_at(dest_x, dest_y)
-                                && (dest_tile == Tile::Floor || dest_tile == Tile::Goal)
-                            {
-                                // Valid unpush
-                                pushes.add(box_idx, dir);
-                            }
-                        }
+                        on_box((x, y), dir, box_idx);
                     } else {
                         let tile = self.get_tile(nx, ny);
                         if (tile == Tile::Floor || tile == Tile::Goal)
@@ -646,7 +676,10 @@ impl fmt::Display for Game {
                 let tile = self.tiles[y as usize][x as usize];
                 let has_box = self.boxes.has_box_at(x, y);
 
-                let ch = if (x, y) == self.player {
+                let is_player =
+                    matches!(self.player, PlayerPos::Known(px, py) if (x, y) == (px, py));
+
+                let ch = if is_player {
                     match tile {
                         Tile::Goal => '+',
                         _ => '@',
@@ -689,7 +722,7 @@ mod tests {
 
         assert_eq!(game.width, 6);
         assert_eq!(game.height, 7);
-        assert_eq!(game.player, (2, 3));
+        assert_eq!(game.player, PlayerPos::Known(2, 3));
     }
 
     #[test]
@@ -715,7 +748,7 @@ mod tests {
                      #$. #\n\
                      ####";
         let game = Game::from_text(input).unwrap();
-        assert_eq!(game.player, (2, 1));
+        assert_eq!(game.player, PlayerPos::Known(2, 1));
         assert_eq!(game.get_tile(2, 1), Tile::Goal);
     }
 
@@ -828,7 +861,7 @@ mod tests {
         assert_eq!(game.get_tile(2, 1), Tile::Floor);
         assert!(!game.boxes.has_box_at(2, 1));
         // Player should be at old box position
-        assert_eq!(game.player, (2, 1));
+        assert_eq!(game.player, PlayerPos::Known(2, 1));
         // Should be solved
         assert!(game.is_solved());
         assert_eq!(game.empty_goals, 0);
@@ -847,7 +880,7 @@ mod tests {
             box_index: box_idx,
             direction: Direction::Right,
         });
-        assert_eq!(game.player, (2, 1));
+        assert_eq!(game.player, PlayerPos::Known(2, 1));
         assert!(game.boxes.has_box_at(3, 1));
 
         // Test pushing down
@@ -862,7 +895,7 @@ mod tests {
             box_index: box_idx,
             direction: Direction::Down,
         });
-        assert_eq!(game.player, (2, 2));
+        assert_eq!(game.player, PlayerPos::Known(2, 2));
         assert_eq!(game.get_tile(2, 3), Tile::Goal);
         assert!(game.boxes.has_box_at(2, 3));
 
@@ -877,7 +910,7 @@ mod tests {
             box_index: box_idx,
             direction: Direction::Left,
         });
-        assert_eq!(game.player, (2, 1));
+        assert_eq!(game.player, PlayerPos::Known(2, 1));
         assert!(game.boxes.has_box_at(1, 1));
 
         // Test pushing up
@@ -892,7 +925,7 @@ mod tests {
             box_index: box_idx,
             direction: Direction::Up,
         });
-        assert_eq!(game.player, (2, 2));
+        assert_eq!(game.player, PlayerPos::Known(2, 2));
         assert_eq!(game.get_tile(2, 1), Tile::Goal);
         assert!(game.boxes.has_box_at(2, 1));
     }
@@ -940,7 +973,7 @@ mod tests {
         assert_eq!(game.get_tile(3, 1), Tile::Floor);
         assert!(game.boxes.has_box_at(3, 1));
         assert_eq!(game.empty_goals, 1);
-        assert_eq!(game.player, (2, 1));
+        assert_eq!(game.player, PlayerPos::Known(2, 1));
     }
 
     #[test]
@@ -1078,7 +1111,8 @@ mod tests {
         let input = "#######\n\
                      #@ *  #\n\
                      #######";
-        let game = Game::from_text(input).unwrap();
+        let mut game = Game::from_text(input).unwrap();
+        game.set_to_goal_state();
         let unpushes = game.compute_initial_unpushes();
         let mut actual = unpushes.iter().collect::<Vec<_>>();
         actual.sort();
@@ -1119,7 +1153,7 @@ mod tests {
         game.push(push);
 
         // Verify state changed
-        assert_eq!(game.player, (2, 1));
+        assert_eq!(game.player, PlayerPos::Known(2, 1));
         assert!(game.boxes.has_box_at(3, 1));
         assert_eq!(game.empty_goals, 0);
         assert!(game.is_solved());
