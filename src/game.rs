@@ -542,16 +542,52 @@ impl Game {
     pub fn compute_unpushes(&self) -> (Pushes, (u8, u8)) {
         let mut pushes = Pushes::new();
         let mut reachable = [[false; MAX_SIZE]; MAX_SIZE];
-        let mut canonical_pos = self.player;
+        let canonical_pos = self.compute_unpushes_helper(self.player, &mut reachable, &mut pushes);
+        (pushes, canonical_pos)
+    }
+
+    /// Compute all possible unpushes from all possible player positions.
+    /// Used for backward search when the final player position is unknown.
+    /// Returns all unpushes that could lead to the current box configuration.
+    pub fn compute_initial_unpushes(&self) -> Pushes {
+        let mut all_pushes = Pushes::new();
+        let mut reachable = [[false; MAX_SIZE]; MAX_SIZE];
+
+        // Try each position as a potential player position
+        for y in 0..self.height {
+            for x in 0..self.width {
+                // Skip if already explored from a previous position
+                if reachable[y as usize][x as usize] {
+                    continue;
+                }
+
+                let tile = self.get_tile(x, y);
+                // Player can only be on floor or goal tiles, and not where a box is
+                if (tile == Tile::Floor || tile == Tile::Goal) && !self.boxes.has_box_at(x, y) {
+                    self.compute_unpushes_helper((x, y), &mut reachable, &mut all_pushes);
+                }
+            }
+        }
+
+        all_pushes
+    }
+
+    fn compute_unpushes_helper(
+        &self,
+        player: (u8, u8),
+        reachable: &mut [[bool; MAX_SIZE]; MAX_SIZE],
+        pushes: &mut Pushes,
+    ) -> (u8, u8) {
+        let mut canonical_pos = player;
 
         // Stack-allocated stack for DFS
         let mut stack: [(u8, u8); MAX_SIZE * MAX_SIZE] = [(0, 0); MAX_SIZE * MAX_SIZE];
         let mut stack_size = 0;
 
         // DFS from player position to find all reachable positions
-        stack[stack_size] = self.player;
+        stack[stack_size] = player;
         stack_size += 1;
-        reachable[self.player.1 as usize][self.player.0 as usize] = true;
+        reachable[player.1 as usize][player.0 as usize] = true;
 
         while stack_size > 0 {
             stack_size -= 1;
@@ -595,7 +631,7 @@ impl Game {
             }
         }
 
-        (pushes, canonical_pos)
+        canonical_pos
     }
 }
 
@@ -1032,6 +1068,30 @@ mod tests {
             }]
         );
         assert_eq!(canonical_pos, (3, 1));
+    }
+
+    #[test]
+    fn test_compute_initial_unpushes() {
+        let input = "######\n\
+                     #@ * #\n\
+                     ######";
+        let game = Game::from_text(input).unwrap();
+        let unpushes = game.compute_initial_unpushes();
+        let mut actual = unpushes.iter().collect::<Vec<_>>();
+        actual.sort();
+
+        let mut expected = vec![
+            Push {
+                box_index: 0,
+                direction: Direction::Left,
+            },
+            Push {
+                box_index: 0,
+                direction: Direction::Right,
+            },
+        ];
+        expected.sort();
+        assert_eq!(actual, expected);
     }
 
     #[test]
