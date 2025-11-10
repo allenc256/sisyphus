@@ -50,7 +50,7 @@ impl<H: Heuristic> Solver<H> {
         }
 
         // IDA*: try increasing f-cost thresholds
-        let mut threshold = self.heuristic.compute(game);
+        let mut threshold = self.heuristic.compute_forward(game);
 
         loop {
             solution.clear();
@@ -112,7 +112,7 @@ impl<H: Heuristic> Solver<H> {
         }
 
         // Compute heuristic and f-cost
-        let h_cost = self.heuristic.compute(game);
+        let h_cost = self.heuristic.compute_forward(game);
         let f_cost = g_cost + h_cost;
 
         // If f-cost exceeds threshold, stop searching this branch

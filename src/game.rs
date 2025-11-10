@@ -153,6 +153,7 @@ impl<'a> IntoIterator for &'a Pushes {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Boxes {
+    start_positions: [(u8, u8); MAX_BOXES],
     positions: [(u8, u8); MAX_BOXES],
     count: u8,
     // Maps board position to box index (255 = no box at this position)
@@ -187,6 +188,7 @@ impl Goals {
 impl Boxes {
     fn new() -> Self {
         Boxes {
+            start_positions: [(0, 0); MAX_BOXES],
             positions: [(0, 0); MAX_BOXES],
             count: 0,
             index: [[255u8; MAX_SIZE]; MAX_SIZE],
@@ -199,6 +201,7 @@ impl Boxes {
             "Cannot add box: maximum of {} boxes exceeded",
             MAX_BOXES
         );
+        self.start_positions[self.count as usize] = (x, y);
         self.positions[self.count as usize] = (x, y);
         self.index[y as usize][x as usize] = self.count;
         self.count += 1;
@@ -345,8 +348,8 @@ impl Game {
         self.boxes.positions[index]
     }
 
-    pub fn goal_count(&self) -> usize {
-        self.goals.count as usize
+    pub fn box_start_pos(&self, index: usize) -> (u8, u8) {
+        self.boxes.start_positions[index]
     }
 
     pub fn goal_pos(&self, index: usize) -> (u8, u8) {

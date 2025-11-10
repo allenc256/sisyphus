@@ -2,12 +2,11 @@ use crate::game::{Game, MAX_BOXES};
 
 /// Trait for computing heuristics that estimate the number of pushes needed to solve a game.
 pub trait Heuristic {
-    /// Compute the estimated number of pushes needed to complete the game from the current state.
-    /// Returns 0 if the game is already solved.
-    /// A good heuristic should be:
-    /// - Admissible: never overestimate the actual number of pushes needed
-    /// - Consistent: h(n) <= cost(n, n') + h(n') for any successor n' of n
-    fn compute(&self, game: &Game) -> usize;
+    /// Compute estimated number of pushes needed to complete the game from the current state.
+    fn compute_forward(&self, game: &Game) -> usize;
+
+    /// Compute estimated number of pushes needed to get to the current state from the initial state.
+    fn compute_backward(&self, game: &Game) -> usize;
 }
 
 pub struct NullHeuristic;
@@ -19,7 +18,11 @@ impl NullHeuristic {
 }
 
 impl Heuristic for NullHeuristic {
-    fn compute(&self, _game: &Game) -> usize {
+    fn compute_forward(&self, _game: &Game) -> usize {
+        0
+    }
+
+    fn compute_backward(&self, _game: &Game) -> usize {
         0
     }
 }
@@ -38,52 +41,34 @@ impl GreedyHeuristic {
         let dy = (pos1.1 as i32 - pos2.1 as i32).abs();
         (dx + dy) as usize
     }
-}
 
-impl Heuristic for GreedyHeuristic {
-    fn compute(&self, game: &Game) -> usize {
-        let box_count = game.box_count();
-        let goal_count = game.goal_count();
-
-        if box_count == 0 || goal_count == 0 {
-            return 0;
-        }
-
-        // Arrays to track unmatched boxes and goals
-        // Initialize with indices 0, 1, 2, ...
-        let mut boxes_left = [0; MAX_BOXES];
-        let mut goals_left = [0; MAX_BOXES];
-        let mut boxes_left_count = box_count;
-        let mut goals_left_count = goal_count;
-
-        for i in 0..box_count {
-            boxes_left[i] = i;
-            goals_left[i] = i;
-        }
-
+    fn greedy_distance(
+        src_positions: &mut [(u8, u8); MAX_BOXES],
+        dst_positions: &mut [(u8, u8); MAX_BOXES],
+        unmatched_count: usize,
+    ) -> usize {
         let mut total_distance = 0;
+        let mut unmatched_count = unmatched_count;
 
-        // Greedy matching: repeatedly find and match the closest box-goal pair
+        // Greedy matching: repeatedly find and match the closest src-dst pair
         #[allow(clippy::needless_range_loop)]
-        while boxes_left_count > 0 && goals_left_count > 0 {
+        while unmatched_count > 0 {
             let mut min_distance = usize::MAX;
-            let mut best_box_idx = 0;
-            let mut best_goal_idx = 0;
+            let mut best_src_idx = 0;
+            let mut best_dst_idx = 0;
 
-            // Find the closest unmatched box-goal pair
-            for box_i in 0..boxes_left_count {
-                let box_idx = boxes_left[box_i];
-                let box_pos = game.box_pos(box_idx);
+            // Find the closest unmatched src-dst pair
+            for src_i in 0..unmatched_count {
+                let src_pos = src_positions[src_i];
 
-                for goal_i in 0..goals_left_count {
-                    let goal_idx = goals_left[goal_i];
-                    let goal_pos = game.goal_pos(goal_idx);
-                    let distance = Self::manhattan_distance(box_pos, goal_pos);
+                for dst_i in 0..unmatched_count {
+                    let dst_pos = dst_positions[dst_i];
+                    let distance = Self::manhattan_distance(src_pos, dst_pos);
 
                     if distance < min_distance {
                         min_distance = distance;
-                        best_box_idx = box_i;
-                        best_goal_idx = goal_i;
+                        best_src_idx = src_i;
+                        best_dst_idx = dst_i;
                     }
                 }
             }
@@ -92,14 +77,40 @@ impl Heuristic for GreedyHeuristic {
             total_distance += min_distance;
 
             // Remove matched box and goal using swap with last element
-            boxes_left_count -= 1;
-            boxes_left[best_box_idx] = boxes_left[boxes_left_count];
-
-            goals_left_count -= 1;
-            goals_left[best_goal_idx] = goals_left[goals_left_count];
+            unmatched_count -= 1;
+            src_positions[best_src_idx] = src_positions[unmatched_count];
+            dst_positions[best_dst_idx] = dst_positions[unmatched_count];
         }
 
         total_distance
+    }
+}
+
+impl Heuristic for GreedyHeuristic {
+    fn compute_forward(&self, game: &Game) -> usize {
+        let box_count = game.box_count();
+        let mut boxes = [(0u8, 0u8); MAX_BOXES];
+        let mut goals = [(0u8, 0u8); MAX_BOXES];
+
+        for i in 0..box_count {
+            boxes[i] = game.box_pos(i);
+            goals[i] = game.goal_pos(i);
+        }
+
+        Self::greedy_distance(&mut boxes, &mut goals, box_count)
+    }
+
+    fn compute_backward(&self, game: &Game) -> usize {
+        let box_count = game.box_count();
+        let mut box_starts = [(0u8, 0u8); MAX_BOXES];
+        let mut boxes = [(0u8, 0u8); MAX_BOXES];
+
+        for i in 0..box_count {
+            box_starts[i] = game.box_start_pos(i);
+            boxes[i] = game.box_pos(i);
+        }
+
+        Self::greedy_distance(&mut box_starts, &mut boxes, box_count)
     }
 }
 
@@ -121,7 +132,7 @@ mod tests {
         let game = Game::from_text(input).unwrap();
         let heuristic = GreedyHeuristic::new();
 
-        assert_eq!(heuristic.compute(&game), 0);
+        assert_eq!(heuristic.compute_forward(&game), 0);
     }
 
     #[test]
@@ -133,7 +144,7 @@ mod tests {
         let heuristic = GreedyHeuristic::new();
 
         // Box at (2,1), goal at (3,1), Manhattan distance = 1
-        assert_eq!(heuristic.compute(&game), 1);
+        assert_eq!(heuristic.compute_forward(&game), 1);
     }
 
     #[test]
@@ -149,6 +160,6 @@ mod tests {
 
         // Two boxes at (2,2) and (3,2), two goals at (2,3) and (3,3)
         // Greedy matching should pair them optimally: each box is 1 away from a goal
-        assert_eq!(heuristic.compute(&game), 2);
+        assert_eq!(heuristic.compute_forward(&game), 2);
     }
 }
