@@ -3,7 +3,7 @@ use crate::heuristic::Heuristic;
 use crate::zobrist::Zobrist;
 use std::collections::HashMap;
 
-/// Result of an IDA* search iteration
+/// Result of a search iteration
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SearchResult {
     /// Solution found
@@ -14,7 +14,8 @@ enum SearchResult {
     Cutoff,
 }
 
-pub struct Solver<H: Heuristic> {
+/// Performs A* search up to a specified threshold
+struct Searcher<H: Heuristic> {
     nodes_explored: usize,
     max_nodes_explored: usize,
     table: HashMap<u64, usize>, // Transposition table mapping state hash to g-cost of first visit
@@ -22,9 +23,14 @@ pub struct Solver<H: Heuristic> {
     heuristic: H,
 }
 
-impl<H: Heuristic> Solver<H> {
-    pub fn new(max_nodes_explored: usize, heuristic: H) -> Self {
-        Solver {
+/// Manages iterative deepening A* by repeatedly calling Searcher with increasing thresholds
+pub struct Solver<H: Heuristic> {
+    searcher: Searcher<H>,
+}
+
+impl<H: Heuristic> Searcher<H> {
+    fn new(max_nodes_explored: usize, heuristic: H) -> Self {
+        Searcher {
             nodes_explored: 0,
             max_nodes_explored,
             table: HashMap::new(),
@@ -33,81 +39,16 @@ impl<H: Heuristic> Solver<H> {
         }
     }
 
-    /// Solve the game using IDA* (Iterative Deepening A*)
-    pub fn solve(&mut self, game: &Game) -> Option<Vec<Push>> {
-        // Check if already solved
-        if game.is_solved() {
-            return Some(Vec::new());
-        }
-
-        let mut solution = Vec::new();
-
-        // Initial hash: only hash box positions, not player
-        let mut boxes_hash = 0u64;
-        for box_idx in 0..game.box_count() {
-            let (x, y) = game.box_pos(box_idx);
-            boxes_hash ^= self.zobrist.box_hash(x, y);
-        }
-
-        // IDA*: try increasing f-cost thresholds
-        let mut threshold = self.heuristic.compute_forward(game);
-
-        loop {
-            solution.clear();
-            self.table.clear();
-
-            match self.search(&mut game.clone(), &mut solution, 0, threshold, boxes_hash) {
-                SearchResult::Found => {
-                    self.verify_solution(game, &solution);
-                    return Some(solution);
-                }
-                SearchResult::Exceeded => {
-                    threshold += 1;
-                }
-                SearchResult::Cutoff => {
-                    return None;
-                }
-            }
-
-            // If we've exceeded max nodes, give up
-            if self.nodes_explored > self.max_nodes_explored {
-                return None;
-            }
-        }
-    }
-
-    pub fn nodes_explored(&self) -> usize {
+    fn nodes_explored(&self) -> usize {
         self.nodes_explored
     }
 
-    fn verify_solution(&self, game: &Game, solution: &[Push]) {
-        let mut test_game = game.clone();
-        for (i, push) in solution.iter().enumerate() {
-            // Compute valid pushes at this state
-            let (valid_pushes, _canonical_pos) = test_game.compute_pushes();
-
-            // Verify that this push is among the valid pushes
-            assert!(
-                valid_pushes.contains(*push),
-                "Solution verification failed: push {} (box {}, direction {:?}) is not valid",
-                i + 1,
-                push.box_index,
-                push.direction
-            );
-
-            // Apply the push
-            test_game.push(*push);
-        }
-
-        // Verify final state is solved
-        assert!(
-            test_game.is_solved(),
-            "Solution verification failed: after {} pushes, puzzle is not solved",
-            solution.len()
-        );
+    fn reset(&mut self) {
+        self.table.clear();
     }
 
-    /// IDA* search function
+    /// Perform DFS A* search up to the specified threshold
+    /// Returns SearchResult and modifies solution in place if found
     fn search(
         &mut self,
         game: &mut Game,
@@ -182,6 +123,91 @@ impl<H: Heuristic> Solver<H> {
         }
 
         SearchResult::Exceeded
+    }
+}
+
+impl<H: Heuristic> Solver<H> {
+    pub fn new(max_nodes_explored: usize, heuristic: H) -> Self {
+        Solver {
+            searcher: Searcher::new(max_nodes_explored, heuristic),
+        }
+    }
+
+    /// Solve the game using IDA* (Iterative Deepening A*)
+    pub fn solve(&mut self, game: &Game) -> Option<Vec<Push>> {
+        // Check if already solved
+        if game.is_solved() {
+            return Some(Vec::new());
+        }
+
+        let mut solution = Vec::new();
+
+        // Initial hash: only hash box positions, not player
+        let mut boxes_hash = 0u64;
+        for box_idx in 0..game.box_count() {
+            let (x, y) = game.box_pos(box_idx);
+            boxes_hash ^= self.searcher.zobrist.box_hash(x, y);
+        }
+
+        // IDA*: try increasing f-cost thresholds
+        let mut threshold = self.searcher.heuristic.compute_forward(game);
+
+        loop {
+            solution.clear();
+            self.searcher.reset();
+
+            match self
+                .searcher
+                .search(&mut game.clone(), &mut solution, 0, threshold, boxes_hash)
+            {
+                SearchResult::Found => {
+                    self.verify_solution(game, &solution);
+                    return Some(solution);
+                }
+                SearchResult::Exceeded => {
+                    threshold += 1;
+                }
+                SearchResult::Cutoff => {
+                    return None;
+                }
+            }
+
+            // If we've exceeded max nodes, give up
+            if self.searcher.nodes_explored > self.searcher.max_nodes_explored {
+                return None;
+            }
+        }
+    }
+
+    pub fn nodes_explored(&self) -> usize {
+        self.searcher.nodes_explored()
+    }
+
+    fn verify_solution(&self, game: &Game, solution: &[Push]) {
+        let mut test_game = game.clone();
+        for (i, push) in solution.iter().enumerate() {
+            // Compute valid pushes at this state
+            let (valid_pushes, _canonical_pos) = test_game.compute_pushes();
+
+            // Verify that this push is among the valid pushes
+            assert!(
+                valid_pushes.contains(*push),
+                "Solution verification failed: push {} (box {}, direction {:?}) is not valid",
+                i + 1,
+                push.box_index,
+                push.direction
+            );
+
+            // Apply the push
+            test_game.push(*push);
+        }
+
+        // Verify final state is solved
+        assert!(
+            test_game.is_solved(),
+            "Solution verification failed: after {} pushes, puzzle is not solved",
+            solution.len()
+        );
     }
 }
 
