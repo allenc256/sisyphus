@@ -1,5 +1,5 @@
 use crate::game::{Game, PlayerPos, Push, Pushes};
-use crate::heuristic::{self, Heuristic};
+use crate::heuristic::Heuristic;
 use crate::zobrist::Zobrist;
 use std::collections::HashMap;
 
@@ -28,6 +28,12 @@ struct Searcher<H: Heuristic> {
     table: HashMap<u64, TableEntry>, // Transposition table mapping state hash to entry
     zobrist: Zobrist,
     heuristic: H,
+    direction: SearchDirection,
+}
+
+enum SearchDirection {
+    Forwards,
+    Backwards,
 }
 
 /// Manages iterative deepening A* by repeatedly calling Searcher with increasing thresholds
@@ -36,13 +42,14 @@ pub struct Solver<H: Heuristic> {
 }
 
 impl<H: Heuristic> Searcher<H> {
-    fn new(max_nodes_explored: usize, heuristic: H) -> Self {
+    fn new(max_nodes_explored: usize, heuristic: H, direction: SearchDirection) -> Self {
         Searcher {
             nodes_explored: 0,
             max_nodes_explored,
             table: HashMap::new(),
             zobrist: Zobrist::new(),
             heuristic,
+            direction,
         }
     }
 
@@ -52,29 +59,6 @@ impl<H: Heuristic> Searcher<H> {
 
     fn reset(&mut self) {
         self.table.clear();
-    }
-
-    fn compute_heuristic(&self, game: &Game) -> usize {
-        self.heuristic.compute_forward(game)
-    }
-
-    fn compute_moves(&self, game: &Game) -> (Pushes, PlayerPos) {
-        game.compute_pushes()
-    }
-
-    fn apply_move(&self, game: &mut Game, push: Push) -> ((u8, u8), (u8, u8)) {
-        let old_box_pos = game.box_pos(push.box_index as usize);
-        game.push(push);
-        let new_box_pos = game.box_pos(push.box_index as usize);
-        (old_box_pos, new_box_pos)
-    }
-
-    fn unapply_move(&self, game: &mut Game, push: Push) {
-        game.unpush(push)
-    }
-
-    fn is_terminal(&self, game: &Game) -> bool {
-        game.is_solved()
     }
 
     /// Compute the hash for a game state (boxes hash XOR canonical player position hash)
@@ -110,12 +94,12 @@ impl<H: Heuristic> Searcher<H> {
             let target_parent_hash = entry.parent_hash;
 
             // Compute all possible unpushes from current state
-            let (unpushes, _canonical_pos) = current_game.compute_unpushes();
+            let (unmoves, _canonical_pos) = self.compute_unmoves(&current_game);
 
             // Try each unpush to find which one leads to parent state
             let mut found = false;
-            for unpush in &unpushes {
-                current_game.unpush(unpush);
+            for unmove in &unmoves {
+                self.unapply_move(&mut current_game, unmove);
 
                 // Compute hash of this previous state
                 let prev_hash = self.compute_hash(&current_game);
@@ -123,14 +107,14 @@ impl<H: Heuristic> Searcher<H> {
                 // Check if this matches the parent we're looking for
                 if prev_hash == target_parent_hash {
                     // This is the correct unpush (which was a push in forward direction)
-                    solution.push(unpush);
+                    solution.push(unmove);
                     current_hash = prev_hash;
                     found = true;
                     break;
                 }
 
                 // Redo the unpush if it wasn't correct
-                current_game.push(unpush);
+                self.apply_move(&mut current_game, unmove);
             }
 
             assert!(
@@ -151,6 +135,7 @@ impl<H: Heuristic> Searcher<H> {
         game: &mut Game,
         g_cost: usize,
         threshold: usize,
+        target_hash: u64,
         boxes_hash: u64,
         parent_hash: u64,
     ) -> SearchResult {
@@ -194,20 +179,29 @@ impl<H: Heuristic> Searcher<H> {
         );
 
         // Check if we've reached the target (after adding to transposition table)
-        if self.is_terminal(game) {
+        if curr_hash == target_hash {
             return SearchResult::Found;
         }
 
         // Try each push
         for push in &pushes {
-            let (old_box_pos, new_box_pos) = self.apply_move(game, push);
+            let old_box_pos = game.box_pos(push.box_index as usize);
+            self.apply_move(game, push);
+            let new_box_pos = game.box_pos(push.box_index as usize);
 
             // Update boxes hash (unhash old position, hash new position)
             let new_boxes_hash = boxes_hash
                 ^ self.zobrist.box_hash(old_box_pos.0, old_box_pos.1)
                 ^ self.zobrist.box_hash(new_box_pos.0, new_box_pos.1);
 
-            let result = self.search(game, g_cost + 1, threshold, new_boxes_hash, curr_hash);
+            let result = self.search(
+                game,
+                g_cost + 1,
+                threshold,
+                target_hash,
+                new_boxes_hash,
+                curr_hash,
+            );
             if result == SearchResult::Found {
                 return result;
             }
@@ -221,12 +215,47 @@ impl<H: Heuristic> Searcher<H> {
 
         SearchResult::Exceeded
     }
+
+    fn compute_heuristic(&self, game: &Game) -> usize {
+        match self.direction {
+            SearchDirection::Forwards => self.heuristic.compute_forward(game),
+            SearchDirection::Backwards => self.heuristic.compute_backward(game),
+        }
+    }
+
+    fn compute_moves(&self, game: &Game) -> (Pushes, PlayerPos) {
+        match self.direction {
+            SearchDirection::Forwards => game.compute_pushes(),
+            SearchDirection::Backwards => game.compute_unpushes(),
+        }
+    }
+
+    fn compute_unmoves(&self, game: &Game) -> (Pushes, PlayerPos) {
+        match self.direction {
+            SearchDirection::Forwards => game.compute_unpushes(),
+            SearchDirection::Backwards => game.compute_pushes(),
+        }
+    }
+
+    fn apply_move(&self, game: &mut Game, push: Push) {
+        match self.direction {
+            SearchDirection::Forwards => game.push(push),
+            SearchDirection::Backwards => game.unpush(push),
+        }
+    }
+
+    fn unapply_move(&self, game: &mut Game, push: Push) {
+        match self.direction {
+            SearchDirection::Forwards => game.unpush(push),
+            SearchDirection::Backwards => game.push(push),
+        }
+    }
 }
 
 impl<H: Heuristic> Solver<H> {
     pub fn new(max_nodes_explored: usize, heuristic: H) -> Self {
         Solver {
-            searcher: Searcher::new(max_nodes_explored, heuristic),
+            searcher: Searcher::new(max_nodes_explored, heuristic, SearchDirection::Forwards),
         }
     }
 
@@ -236,6 +265,8 @@ impl<H: Heuristic> Solver<H> {
         if game.is_solved() {
             return Some(Vec::new());
         }
+
+        let target_hash = self.compute_target_hash(game);
 
         // Initial hash: only hash box positions, not player
         let mut boxes_hash = 0u64;
@@ -253,7 +284,7 @@ impl<H: Heuristic> Solver<H> {
 
             match self
                 .searcher
-                .search(&mut search_game, 0, threshold, boxes_hash, 0)
+                .search(&mut search_game, 0, threshold, target_hash, boxes_hash, 0)
             {
                 SearchResult::Found => {
                     let solution = self.searcher.reconstruct_solution(&search_game);
@@ -272,6 +303,17 @@ impl<H: Heuristic> Solver<H> {
             if self.searcher.nodes_explored > self.searcher.max_nodes_explored {
                 return None;
             }
+        }
+    }
+
+    fn compute_target_hash(&self, game: &Game) -> u64 {
+        match self.searcher.direction {
+            SearchDirection::Forwards => {
+                let mut target = game.clone();
+                target.set_to_goal_state();
+                self.searcher.compute_hash(&target)
+            }
+            SearchDirection::Backwards => self.searcher.compute_hash(game),
         }
     }
 
