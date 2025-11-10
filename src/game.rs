@@ -106,6 +106,11 @@ impl Pushes {
         self.bits.iter().all(|&word| word == 0)
     }
 
+    pub fn contains(&self, push: Push) -> bool {
+        let dir_idx = push.direction.index();
+        (self.bits[dir_idx] & (1u32 << push.box_index)) != 0
+    }
+
     pub fn iter(&self) -> PushesIter {
         PushesIter {
             moves: self,

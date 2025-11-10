@@ -80,14 +80,26 @@ impl<H: Heuristic> Solver<H> {
         self.nodes_explored
     }
 
-    // This verification is pretty basic. A proper verification should verify
-    // that all moves are indeed valid (i.e., the player can actually make the
-    // claimed pushes).
     fn verify_solution(&self, game: &Game, solution: &[Push]) {
         let mut test_game = game.clone();
-        for push in solution.iter() {
+        for (i, push) in solution.iter().enumerate() {
+            // Compute valid pushes at this state
+            let (valid_pushes, _canonical_pos) = test_game.compute_pushes();
+
+            // Verify that this push is among the valid pushes
+            assert!(
+                valid_pushes.contains(*push),
+                "Solution verification failed: push {} (box {}, direction {:?}) is not valid",
+                i + 1,
+                push.box_index,
+                push.direction
+            );
+
+            // Apply the push
             test_game.push(*push);
         }
+
+        // Verify final state is solved
         assert!(
             test_game.is_solved(),
             "Solution verification failed: after {} pushes, puzzle is not solved",
