@@ -14,11 +14,18 @@ enum SearchResult {
     Cutoff,
 }
 
+/// Entry in the transposition table
+#[derive(Debug, Clone, Copy)]
+struct TableEntry {
+    parent_hash: u64,
+    g_cost: usize,
+}
+
 /// Performs A* search up to a specified threshold
 struct Searcher<H: Heuristic> {
     nodes_explored: usize,
     max_nodes_explored: usize,
-    table: HashMap<u64, usize>, // Transposition table mapping state hash to g-cost of first visit
+    table: HashMap<u64, TableEntry>, // Transposition table mapping state hash to entry
     zobrist: Zobrist,
     heuristic: H,
 }
@@ -56,6 +63,7 @@ impl<H: Heuristic> Searcher<H> {
         g_cost: usize,
         threshold: usize,
         boxes_hash: u64,
+        parent_hash: u64,
     ) -> SearchResult {
         self.nodes_explored += 1;
 
@@ -82,18 +90,24 @@ impl<H: Heuristic> Searcher<H> {
         let (pushes, canonical_pos) = game.compute_pushes();
 
         // Hash in the canonical player position
-        let full_hash = boxes_hash ^ self.zobrist.player_hash(canonical_pos.0, canonical_pos.1);
+        let curr_hash = boxes_hash ^ self.zobrist.player_hash(canonical_pos.0, canonical_pos.1);
 
         // Check transposition table
-        if let Some(&prev_g_cost) = self.table.get(&full_hash) {
+        if let Some(entry) = self.table.get(&curr_hash) {
             // Skip if we've seen this state at a shallower or equal g-cost
-            if g_cost >= prev_g_cost {
+            if g_cost >= entry.g_cost {
                 return SearchResult::Exceeded;
             }
         }
 
         // Mark this state as visited
-        self.table.insert(full_hash, g_cost);
+        self.table.insert(
+            curr_hash,
+            TableEntry {
+                parent_hash,
+                g_cost,
+            },
+        );
 
         // Try each push
         for push in &pushes {
@@ -109,7 +123,14 @@ impl<H: Heuristic> Searcher<H> {
                 ^ self.zobrist.box_hash(old_box_pos.0, old_box_pos.1)
                 ^ self.zobrist.box_hash(new_box_pos.0, new_box_pos.1);
 
-            let result = self.search(game, solution, g_cost + 1, threshold, new_boxes_hash);
+            let result = self.search(
+                game,
+                solution,
+                g_cost + 1,
+                threshold,
+                new_boxes_hash,
+                curr_hash,
+            );
             if result == SearchResult::Found {
                 return SearchResult::Found;
             }
@@ -156,10 +177,14 @@ impl<H: Heuristic> Solver<H> {
             solution.clear();
             self.searcher.reset();
 
-            match self
-                .searcher
-                .search(&mut game.clone(), &mut solution, 0, threshold, boxes_hash)
-            {
+            match self.searcher.search(
+                &mut game.clone(),
+                &mut solution,
+                0,
+                threshold,
+                boxes_hash,
+                0,
+            ) {
                 SearchResult::Found => {
                     self.verify_solution(game, &solution);
                     return Some(solution);
