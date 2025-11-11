@@ -5,10 +5,10 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 /// Result of a search iteration
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 enum SearchResult {
     /// Solution found
-    Found,
+    Found(Box<Game>),
     /// No solution at this threshold
     Exceeded,
     /// Node limit exceeded
@@ -43,6 +43,8 @@ struct Searcher<H: Heuristic> {
     zobrist: Rc<Zobrist>,
     heuristic: H,
     direction: SearchDirection,
+    initial_game: Rc<Game>,
+    initial_boxes_hash: u64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -71,6 +73,8 @@ impl<H: Heuristic> Searcher<H> {
         max_nodes_explored: usize,
         heuristic: H,
         direction: SearchDirection,
+        initial_game: Rc<Game>,
+        initial_boxes_hash: u64,
     ) -> Self {
         Searcher {
             nodes_explored: 0,
@@ -79,6 +83,8 @@ impl<H: Heuristic> Searcher<H> {
             zobrist,
             heuristic,
             direction,
+            initial_game,
+            initial_boxes_hash,
         }
     }
 
@@ -90,29 +96,13 @@ impl<H: Heuristic> Searcher<H> {
         self.table.clear();
     }
 
-    /// Compute the hash for a game state (boxes hash XOR canonical player position hash)
-    fn compute_hash(&self, game: &Game) -> u64 {
-        let boxes_hash = self.compute_boxes_hash(game);
-        let canonical_pos = game.canonical_player_pos();
-        boxes_hash ^ self.zobrist.player_hash(canonical_pos)
-    }
-
-    fn compute_boxes_hash(&self, game: &Game) -> u64 {
-        let mut boxes_hash = 0u64;
-        for box_idx in 0..game.box_count() {
-            let (x, y) = game.box_pos(box_idx);
-            boxes_hash ^= self.zobrist.box_hash(x, y);
-        }
-        boxes_hash
-    }
-
     /// Reconstruct solution by following parent_hash links backwards from final state
     /// Panics if solution reconstruction fails
     /// Returns solution as position-based pushes (PushByPos)
     fn reconstruct_solution(&self, final_game: &Game) -> Vec<PushByPos> {
         let mut solution = Vec::new();
         let mut current_game = final_game.clone();
-        let mut current_hash = self.compute_hash(&current_game);
+        let mut current_hash = self.zobrist.compute_hash(&current_game);
 
         // Work backwards until we reach the initial state (g_cost == 0)
         loop {
@@ -139,7 +129,7 @@ impl<H: Heuristic> Searcher<H> {
                 let new_box_pos = current_game.box_pos(unmove.box_index as usize);
 
                 // Compute hash of this previous state
-                let prev_hash = self.compute_hash(&current_game);
+                let prev_hash = self.zobrist.compute_hash(&current_game);
 
                 // Check if this matches the parent we're looking for
                 if prev_hash == target_parent_hash {
@@ -173,17 +163,37 @@ impl<H: Heuristic> Searcher<H> {
         solution
     }
 
+    /// Perform A* search up to the specified threshold starting from the initial game state
+    /// Returns SearchResult. If found, use reconstruct_solution to get the solution path.
+    fn search<F>(&mut self, threshold: usize, target_check: &F) -> SearchResult
+    where
+        F: Fn(u64) -> bool,
+    {
+        let mut game = (*self.initial_game).clone();
+        self.search_helper(
+            &mut game,
+            0,
+            threshold,
+            target_check,
+            self.initial_boxes_hash,
+            0,
+        )
+    }
+
     /// Perform DFS A* search up to the specified threshold
     /// Returns SearchResult. If found, use reconstruct_solution to get the solution path.
-    fn search(
+    fn search_helper<F>(
         &mut self,
         game: &mut Game,
         g_cost: usize,
         threshold: usize,
-        target_hash: u64,
+        target_check: &F,
         boxes_hash: u64,
         parent_hash: u64,
-    ) -> SearchResult {
+    ) -> SearchResult
+    where
+        F: Fn(u64) -> bool,
+    {
         self.nodes_explored += 1;
 
         // Check if we've exceeded the node limit
@@ -224,8 +234,8 @@ impl<H: Heuristic> Searcher<H> {
         );
 
         // Check if we've reached the target (after adding to transposition table)
-        if curr_hash == target_hash {
-            return SearchResult::Found;
+        if target_check(curr_hash) {
+            return SearchResult::Found(Box::new(game.clone()));
         }
 
         // Try each push
@@ -239,15 +249,15 @@ impl<H: Heuristic> Searcher<H> {
                 ^ self.zobrist.box_hash(old_box_pos.0, old_box_pos.1)
                 ^ self.zobrist.box_hash(new_box_pos.0, new_box_pos.1);
 
-            let result = self.search(
+            let result = self.search_helper(
                 game,
                 g_cost + 1,
                 threshold,
-                target_hash,
+                target_check,
                 new_boxes_hash,
                 curr_hash,
             );
-            if result == SearchResult::Found {
+            if let SearchResult::Found(_) = result {
                 return result;
             }
 
@@ -302,20 +312,38 @@ impl<H: Heuristic> Searcher<H> {
 }
 
 impl<H: Heuristic> Solver<H> {
-    pub fn new(max_nodes_explored: usize, heuristic: H, search_type: SearchType) -> Self {
+    pub fn new(
+        max_nodes_explored: usize,
+        heuristic: H,
+        search_type: SearchType,
+        game: &Game,
+    ) -> Self {
         let zobrist = Rc::new(Zobrist::new());
+
+        let forwards_game = Rc::new(game.clone());
+        let mut backwards_game = game.clone();
+        backwards_game.set_to_goal_state();
+        let backwards_game = Rc::new(backwards_game);
+
+        let forwards_boxes_hash = zobrist.compute_boxes_hash(&forwards_game);
+        let backwards_boxes_hash = zobrist.compute_boxes_hash(&backwards_game);
+
         Solver {
             forwards: Searcher::new(
                 zobrist.clone(),
                 max_nodes_explored,
                 heuristic.clone(),
                 SearchDirection::Forwards,
+                forwards_game,
+                forwards_boxes_hash,
             ),
             backwards: Searcher::new(
                 zobrist,
                 max_nodes_explored,
                 heuristic,
                 SearchDirection::Backwards,
+                backwards_game,
+                backwards_boxes_hash,
             ),
             search_type,
         }
@@ -349,19 +377,17 @@ impl<H: Heuristic> Solver<H> {
             SearchDirection::Backwards => initial_game.set_to_goal_state(),
         }
 
-        let target_hash = searcher.compute_hash(&target_game);
-        let boxes_hash = searcher.compute_boxes_hash(&initial_game);
+        let target_hash = searcher.zobrist.compute_hash(&target_game);
 
         // IDA*: try increasing f-cost thresholds
         let mut threshold = searcher.compute_heuristic(game);
 
         loop {
             searcher.reset();
-            let mut search_game = initial_game.clone();
 
-            match searcher.search(&mut search_game, 0, threshold, target_hash, boxes_hash, 0) {
-                SearchResult::Found => {
-                    let solution = searcher.reconstruct_solution(&search_game);
+            match searcher.search(threshold, &|hash| hash == target_hash) {
+                SearchResult::Found(final_game) => {
+                    let solution = searcher.reconstruct_solution(&final_game);
                     self.verify_solution(game, &solution);
                     return SolveResult::Solved(solution);
                 }
@@ -427,16 +453,6 @@ impl<H: Heuristic> Solver<H> {
     }
 }
 
-impl Default for Solver<crate::heuristic::GreedyHeuristic> {
-    fn default() -> Self {
-        Self::new(
-            5000000,
-            crate::heuristic::GreedyHeuristic::new(),
-            SearchType::Forwards,
-        )
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -449,7 +465,7 @@ mod tests {
         let game = Game::from_text(input).unwrap();
 
         let heuristic = crate::heuristic::GreedyHeuristic::new();
-        let mut solver = Solver::new(5000000, heuristic, SearchType::Forwards);
+        let mut solver = Solver::new(5000000, heuristic, SearchType::Forwards, &game);
         let result = solver.solve(&game);
 
         assert!(matches!(result, SolveResult::Solved(_)));
@@ -473,7 +489,7 @@ mod tests {
         let game = Game::from_text(input).unwrap();
 
         let heuristic = crate::heuristic::GreedyHeuristic::new();
-        let mut solver = Solver::new(5000000, heuristic, SearchType::Forwards);
+        let mut solver = Solver::new(5000000, heuristic, SearchType::Forwards, &game);
         let result = solver.solve(&game);
 
         assert!(matches!(result, SolveResult::Solved(_)));
@@ -490,7 +506,7 @@ mod tests {
         let game = Game::from_text(input).unwrap();
 
         let heuristic = crate::heuristic::GreedyHeuristic::new();
-        let mut solver = Solver::new(5000000, heuristic, SearchType::Forwards);
+        let mut solver = Solver::new(5000000, heuristic, SearchType::Forwards, &game);
         let result = solver.solve(&game);
 
         assert!(matches!(result, SolveResult::Solved(_)));
