@@ -1,3 +1,4 @@
+use crate::deadlocks::Deadlocks;
 use crate::game::{Game, PlayerPos, Push, PushByPos, Pushes};
 use crate::heuristic::Heuristic;
 use crate::zobrist::Zobrist;
@@ -46,6 +47,7 @@ struct Searcher<H: Heuristic> {
     initial_game: Rc<Game>,
     initial_hash: u64,
     initial_boxes_hash: u64,
+    deadlocks: Deadlocks,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -78,6 +80,7 @@ impl<H: Heuristic> Searcher<H> {
     ) -> Self {
         let initial_hash = zobrist.compute_hash(&initial_game);
         let initial_boxes_hash = zobrist.compute_boxes_hash(&initial_game);
+        let deadlocks = Deadlocks::new(&initial_game);
         let mut searcher = Searcher {
             nodes_explored: 0,
             max_nodes_explored,
@@ -88,6 +91,7 @@ impl<H: Heuristic> Searcher<H> {
             initial_game,
             initial_hash,
             initial_boxes_hash,
+            deadlocks,
         };
         searcher.reset();
         searcher
@@ -191,6 +195,11 @@ impl<H: Heuristic> Searcher<H> {
 
         // Try each push
         for push in &pushes {
+            // Skip moves that would result in a deadlock
+            if self.is_move_deadlock(game, push) {
+                continue;
+            }
+
             let old_box_pos = game.box_pos(push.box_index as usize);
             self.apply_move(game, push);
             let new_box_pos = game.box_pos(push.box_index as usize);
@@ -318,6 +327,13 @@ impl<H: Heuristic> Searcher<H> {
         match self.direction {
             SearchDirection::Forwards => game.unpush(push),
             SearchDirection::Backwards => game.push(push),
+        }
+    }
+
+    fn is_move_deadlock(&self, game: &Game, push: Push) -> bool {
+        match self.direction {
+            SearchDirection::Forwards => self.deadlocks.is_push_deadlock(game, push),
+            SearchDirection::Backwards => self.deadlocks.is_unpush_deadlock(game, push),
         }
     }
 }

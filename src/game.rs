@@ -24,7 +24,7 @@ pub enum Direction {
     Right,
 }
 
-const ALL_DIRECTIONS: [Direction; 4] = [
+pub const ALL_DIRECTIONS: [Direction; 4] = [
     Direction::Up,
     Direction::Down,
     Direction::Left,
@@ -373,6 +373,14 @@ impl Game {
         self.goals.positions[index]
     }
 
+    pub fn width(&self) -> u8 {
+        self.width
+    }
+
+    pub fn height(&self) -> u8 {
+        self.height
+    }
+
     /// Get the box index at the given position, if any.
     /// Returns Some(box_index) if there is a box at (x, y), None otherwise.
     pub fn box_at(&self, x: u8, y: u8) -> Option<u8> {
@@ -382,7 +390,7 @@ impl Game {
 
     /// Move from position (x, y) in the given direction.
     /// Returns Some((new_x, new_y)) if the new position is within bounds, None otherwise.
-    fn move_pos(&self, x: u8, y: u8, dir: Direction) -> Option<(u8, u8)> {
+    pub fn move_pos(&self, x: u8, y: u8, dir: Direction) -> Option<(u8, u8)> {
         let (dx, dy) = dir.delta();
         let new_x = x as i32 + dx as i32;
         let new_y = y as i32 + dy as i32;
@@ -396,7 +404,7 @@ impl Game {
 
     /// Move from position (x, y) in the opposite direction of dir.
     /// Returns Some((new_x, new_y)) if the new position is within bounds, None otherwise.
-    fn unmove_pos(&self, x: u8, y: u8, dir: Direction) -> Option<(u8, u8)> {
+    pub fn unmove_pos(&self, x: u8, y: u8, dir: Direction) -> Option<(u8, u8)> {
         let (dx, dy) = dir.delta();
         let new_x = x as i32 - dx as i32;
         let new_y = y as i32 - dy as i32;

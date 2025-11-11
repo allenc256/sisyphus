@@ -1,3 +1,4 @@
+mod deadlocks;
 mod game;
 mod heuristic;
 mod levels;
