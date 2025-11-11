@@ -59,7 +59,7 @@ fn solve_level_with_heuristic<H: Heuristic>(
 ) {
     let mut solver = Solver::new(max_nodes_explored, heuristic, search_type, game);
     let start = Instant::now();
-    let result = solver.solve(game);
+    let result = solver.solve();
     let elapsed = start.elapsed();
 
     let (solved_char, solution_len) = match &result {
