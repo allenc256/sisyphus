@@ -510,30 +510,34 @@ impl Game {
         self.empty_goals == 0
     }
 
-    /// Set the game state to the final/solved position where all boxes are on goals
+    /// Make a game state  in the solved position where all boxes are on goals
     /// and the player position is unknown. This is useful for backward search.
-    pub fn set_to_goal_state(&mut self) {
+    pub fn make_goal_state(&self) -> Self {
+        let mut game = self.clone();
+
         // Move all boxes to their corresponding goals
         // Do this in two passes to avoid clobbering unprocessed boxes
 
         // First pass: clear all current positions in index
-        for i in 0..self.boxes.count as usize {
-            let current_pos = self.boxes.positions[i];
-            self.boxes.index[current_pos.1 as usize][current_pos.0 as usize] = 255;
+        for i in 0..game.boxes.count as usize {
+            let current_pos = game.boxes.positions[i];
+            game.boxes.index[current_pos.1 as usize][current_pos.0 as usize] = 255;
         }
 
         // Second pass: set all new positions
-        for i in 0..self.boxes.count as usize {
-            let goal_pos = self.goals.positions[i];
-            self.boxes.positions[i] = goal_pos;
-            self.boxes.index[goal_pos.1 as usize][goal_pos.0 as usize] = i as u8;
+        for i in 0..game.boxes.count as usize {
+            let goal_pos = game.goals.positions[i];
+            game.boxes.positions[i] = goal_pos;
+            game.boxes.index[goal_pos.1 as usize][goal_pos.0 as usize] = i as u8;
         }
 
         // Set empty_goals to 0 since all boxes are on goals
-        self.empty_goals = 0;
+        game.empty_goals = 0;
 
         // Set player position to unknown
-        self.player = PlayerPos::Unknown;
+        game.player = PlayerPos::Unknown;
+
+        game
     }
 
     /// Compute the canonical (lexicographically smallest reachable) player position.
@@ -1145,8 +1149,7 @@ mod tests {
         let input = "#######\n\
                      #@ *  #\n\
                      #######";
-        let mut game = Game::from_text(input).unwrap();
-        game.set_to_goal_state();
+        let game = Game::from_text(input).unwrap().make_goal_state();
         let (unpushes, canonical_pos) = game.compute_unpushes();
         let mut actual = unpushes.iter().collect::<Vec<_>>();
         actual.sort();

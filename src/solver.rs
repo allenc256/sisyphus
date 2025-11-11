@@ -331,12 +331,8 @@ impl<H: Heuristic> Solver<H> {
     ) -> Self {
         let zobrist = Rc::new(Zobrist::new());
         let heuristic = Rc::new(heuristic);
-
         let forwards_game = Rc::new(game.clone());
-
-        let mut backwards_game = game.clone();
-        backwards_game.set_to_goal_state();
-        let backwards_game = Rc::new(backwards_game);
+        let backwards_game = Rc::new(game.make_goal_state());
 
         Solver {
             forwards: Searcher::new(
