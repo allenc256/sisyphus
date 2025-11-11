@@ -78,6 +78,12 @@ pub struct Push {
     pub direction: Direction,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PushByPos {
+    pub box_pos: (u8, u8),
+    pub direction: Direction,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Pushes {
     // Bitset: bits[0] = Up for all boxes, bits[1] = Down, bits[2] = Left, bits[3] = Right
@@ -444,6 +450,20 @@ impl Game {
         self.player = PlayerPos::Known(x, y);
     }
 
+    /// Push a box identified by its position.
+    /// Panics if there is no box at the given position.
+    pub fn push_by_pos(&mut self, push: PushByPos) {
+        let (x, y) = push.box_pos;
+        let box_index = self
+            .box_at(x, y)
+            .expect(&format!("No box at position ({}, {})", x, y));
+
+        self.push(Push {
+            box_index,
+            direction: push.direction,
+        });
+    }
+
     /// Undo a push operation.
     /// Moves the box back in the opposite direction and restores player position.
     /// Panics if the unpush is invalid (invalid box index).
@@ -494,13 +514,17 @@ impl Game {
     /// and the player position is unknown. This is useful for backward search.
     pub fn set_to_goal_state(&mut self) {
         // Move all boxes to their corresponding goals
+        // Do this in two passes to avoid clobbering unprocessed boxes
+
+        // First pass: clear all current positions in index
         for i in 0..self.boxes.count as usize {
             let current_pos = self.boxes.positions[i];
-            let goal_pos = self.goals.positions[i];
-
-            // Clear current position in index
             self.boxes.index[current_pos.1 as usize][current_pos.0 as usize] = 255;
-            // Set new position
+        }
+
+        // Second pass: set all new positions
+        for i in 0..self.boxes.count as usize {
+            let goal_pos = self.goals.positions[i];
             self.boxes.positions[i] = goal_pos;
             self.boxes.index[goal_pos.1 as usize][goal_pos.0 as usize] = i as u8;
         }

@@ -1,4 +1,4 @@
-use crate::game::{Game, PlayerPos, Push, Pushes};
+use crate::game::{Game, PlayerPos, Push, PushByPos, Pushes};
 use crate::heuristic::Heuristic;
 use crate::zobrist::Zobrist;
 use std::collections::HashMap;
@@ -31,7 +31,8 @@ struct Searcher<H: Heuristic> {
     direction: SearchDirection,
 }
 
-enum SearchDirection {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SearchDirection {
     Forwards,
     Backwards,
 }
@@ -63,18 +64,24 @@ impl<H: Heuristic> Searcher<H> {
 
     /// Compute the hash for a game state (boxes hash XOR canonical player position hash)
     fn compute_hash(&self, game: &Game) -> u64 {
+        let boxes_hash = self.compute_boxes_hash(game);
+        let canonical_pos = game.canonical_player_pos();
+        boxes_hash ^ self.zobrist.player_hash(canonical_pos)
+    }
+
+    fn compute_boxes_hash(&self, game: &Game) -> u64 {
         let mut boxes_hash = 0u64;
         for box_idx in 0..game.box_count() {
             let (x, y) = game.box_pos(box_idx);
             boxes_hash ^= self.zobrist.box_hash(x, y);
         }
-        let canonical_pos = game.canonical_player_pos();
-        boxes_hash ^ self.zobrist.player_hash(canonical_pos)
+        boxes_hash
     }
 
     /// Reconstruct solution by following parent_hash links backwards from final state
     /// Panics if solution reconstruction fails
-    fn reconstruct_solution(&self, final_game: &Game) -> Vec<Push> {
+    /// Returns solution as position-based pushes (PushByPos)
+    fn reconstruct_solution(&self, final_game: &Game) -> Vec<PushByPos> {
         let mut solution = Vec::new();
         let mut current_game = final_game.clone();
         let mut current_hash = self.compute_hash(&current_game);
@@ -99,15 +106,22 @@ impl<H: Heuristic> Searcher<H> {
             // Try each unpush to find which one leads to parent state
             let mut found = false;
             for unmove in &unmoves {
+                let old_box_pos = current_game.box_pos(unmove.box_index as usize);
                 self.unapply_move(&mut current_game, unmove);
+                let new_box_pos = current_game.box_pos(unmove.box_index as usize);
 
                 // Compute hash of this previous state
                 let prev_hash = self.compute_hash(&current_game);
 
                 // Check if this matches the parent we're looking for
                 if prev_hash == target_parent_hash {
-                    // This is the correct unpush (which was a push in forward direction)
-                    solution.push(unmove);
+                    solution.push(PushByPos {
+                        box_pos: match self.direction {
+                            SearchDirection::Forwards => new_box_pos,
+                            SearchDirection::Backwards => old_box_pos,
+                        },
+                        direction: unmove.direction,
+                    });
                     current_hash = prev_hash;
                     found = true;
                     break;
@@ -123,8 +137,11 @@ impl<H: Heuristic> Searcher<H> {
             );
         }
 
-        // Reverse solution since we built it backwards
-        solution.reverse();
+        if self.direction == SearchDirection::Forwards {
+            // Reverse solution since we built it backwards
+            solution.reverse();
+        }
+
         solution
     }
 
@@ -253,34 +270,36 @@ impl<H: Heuristic> Searcher<H> {
 }
 
 impl<H: Heuristic> Solver<H> {
-    pub fn new(max_nodes_explored: usize, heuristic: H) -> Self {
+    pub fn new(max_nodes_explored: usize, heuristic: H, direction: SearchDirection) -> Self {
         Solver {
-            searcher: Searcher::new(max_nodes_explored, heuristic, SearchDirection::Forwards),
+            searcher: Searcher::new(max_nodes_explored, heuristic, direction),
         }
     }
 
     /// Solve the game using IDA* (Iterative Deepening A*)
-    pub fn solve(&mut self, game: &Game) -> Option<Vec<Push>> {
+    pub fn solve(&mut self, game: &Game) -> Option<Vec<PushByPos>> {
         // Check if already solved
         if game.is_solved() {
             return Some(Vec::new());
         }
 
-        let target_hash = self.compute_target_hash(game);
+        let mut initial_game = game.clone();
+        let mut target_game = game.clone();
 
-        // Initial hash: only hash box positions, not player
-        let mut boxes_hash = 0u64;
-        for box_idx in 0..game.box_count() {
-            let (x, y) = game.box_pos(box_idx);
-            boxes_hash ^= self.searcher.zobrist.box_hash(x, y);
+        match self.searcher.direction {
+            SearchDirection::Forwards => target_game.set_to_goal_state(),
+            SearchDirection::Backwards => initial_game.set_to_goal_state(),
         }
+
+        let target_hash = self.searcher.compute_hash(&target_game);
+        let boxes_hash = self.searcher.compute_boxes_hash(&initial_game);
 
         // IDA*: try increasing f-cost thresholds
         let mut threshold = self.searcher.compute_heuristic(game);
 
         loop {
             self.searcher.reset();
-            let mut search_game = game.clone();
+            let mut search_game = initial_game.clone();
 
             match self
                 .searcher
@@ -306,38 +325,42 @@ impl<H: Heuristic> Solver<H> {
         }
     }
 
-    fn compute_target_hash(&self, game: &Game) -> u64 {
-        match self.searcher.direction {
-            SearchDirection::Forwards => {
-                let mut target = game.clone();
-                target.set_to_goal_state();
-                self.searcher.compute_hash(&target)
-            }
-            SearchDirection::Backwards => self.searcher.compute_hash(game),
-        }
-    }
-
     pub fn nodes_explored(&self) -> usize {
         self.searcher.nodes_explored()
     }
 
-    fn verify_solution(&self, game: &Game, solution: &[Push]) {
+    fn verify_solution(&self, game: &Game, solution: &[PushByPos]) {
         let mut test_game = game.clone();
         for (i, push) in solution.iter().enumerate() {
+            // Get box index at this position
+            let box_index = test_game
+                .box_at(push.box_pos.0, push.box_pos.1)
+                .expect(&format!(
+                    "Solution verification failed: no box at position ({}, {}) for push {}",
+                    push.box_pos.0,
+                    push.box_pos.1,
+                    i + 1
+                ));
+
             // Compute valid pushes at this state
             let (valid_pushes, _canonical_pos) = test_game.compute_pushes();
 
             // Verify that this push is among the valid pushes
+            let index_push = Push {
+                box_index,
+                direction: push.direction,
+            };
             assert!(
-                valid_pushes.contains(*push),
-                "Solution verification failed: push {} (box {}, direction {:?}) is not valid",
+                valid_pushes.contains(index_push),
+                "Solution verification failed: push {} (box at ({}, {}), direction {:?}) is not valid",
                 i + 1,
-                push.box_index,
+                push.box_pos.0,
+                push.box_pos.1,
                 push.direction
             );
 
             // Apply the push
-            test_game.push(*push);
+            test_game.push_by_pos(*push);
         }
 
         // Verify final state is solved
@@ -351,7 +374,11 @@ impl<H: Heuristic> Solver<H> {
 
 impl Default for Solver<crate::heuristic::GreedyHeuristic> {
     fn default() -> Self {
-        Self::new(5000000, crate::heuristic::GreedyHeuristic::new())
+        Self::new(
+            5000000,
+            crate::heuristic::GreedyHeuristic::new(),
+            SearchDirection::Forwards,
+        )
     }
 }
 
@@ -367,7 +394,7 @@ mod tests {
         let game = Game::from_text(input).unwrap();
 
         let heuristic = crate::heuristic::GreedyHeuristic::new();
-        let mut solver = Solver::new(5000000, heuristic);
+        let mut solver = Solver::new(5000000, heuristic, SearchDirection::Forwards);
         let solution = solver.solve(&game);
 
         assert!(solution.is_some());
@@ -377,7 +404,7 @@ mod tests {
         // Verify solution works
         let mut test_game = Game::from_text(input).unwrap();
         for push in moves {
-            test_game.push(push);
+            test_game.push_by_pos(push);
         }
         assert!(test_game.is_solved());
     }
@@ -390,7 +417,7 @@ mod tests {
         let game = Game::from_text(input).unwrap();
 
         let heuristic = crate::heuristic::GreedyHeuristic::new();
-        let mut solver = Solver::new(5000000, heuristic);
+        let mut solver = Solver::new(5000000, heuristic, SearchDirection::Forwards);
         let solution = solver.solve(&game);
 
         assert!(solution.is_some());
@@ -405,7 +432,7 @@ mod tests {
         let game = Game::from_text(input).unwrap();
 
         let heuristic = crate::heuristic::GreedyHeuristic::new();
-        let mut solver = Solver::new(5000000, heuristic);
+        let mut solver = Solver::new(5000000, heuristic, SearchDirection::Forwards);
         let solution = solver.solve(&game);
 
         assert!(solution.is_some());
@@ -415,7 +442,7 @@ mod tests {
         // Verify solution works
         let mut test_game = Game::from_text(input).unwrap();
         for push in moves {
-            test_game.push(push);
+            test_game.push_by_pos(push);
         }
         assert!(test_game.is_solved());
     }

@@ -5,10 +5,10 @@ mod solver;
 mod zobrist;
 
 use clap::{Parser, ValueEnum};
-use game::Game;
+use game::{Game, PushByPos};
 use heuristic::{GreedyHeuristic, Heuristic, NullHeuristic};
 use levels::Levels;
-use solver::Solver;
+use solver::{SearchDirection, Solver};
 use std::time::Instant;
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
@@ -17,26 +17,33 @@ enum HeuristicType {
     Null,
 }
 
-fn print_solution(game: &Game, solution: &[game::Push]) {
-    println!();
-    println!("{}", game);
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum Direction {
+    Forwards,
+    Backwards,
+}
+
+impl From<Direction> for SearchDirection {
+    fn from(dir: Direction) -> Self {
+        match dir {
+            Direction::Forwards => SearchDirection::Forwards,
+            Direction::Backwards => SearchDirection::Backwards,
+        }
+    }
+}
+
+fn print_solution(game: &Game, solution: &[PushByPos]) {
+    println!("\nStarting position:\n{}", game);
     let mut game = game.clone();
     let mut count = 0;
     let total = solution.len();
     for push in solution {
-        game.push(*push);
+        game.push_by_pos(*push);
         count += 1;
-
-        println!();
         println!(
-            "Push crate #{} {} ({}/{})",
-            push.box_index + 1,
-            push.direction,
-            count,
-            total
+            "Push crate ({}, {}) {} ({}/{}):\n{}",
+            push.box_pos.0, push.box_pos.1, push.direction, count, total, game
         );
-        println!();
-        println!("{}", game);
     }
 }
 
@@ -46,8 +53,9 @@ fn solve_level_with_heuristic<H: Heuristic>(
     print_solution_flag: bool,
     max_nodes_explored: usize,
     heuristic: H,
+    direction: SearchDirection,
 ) {
-    let mut solver = Solver::new(max_nodes_explored, heuristic);
+    let mut solver = Solver::new(max_nodes_explored, heuristic, direction);
     let start = Instant::now();
     let result = solver.solve(game);
     let elapsed = start.elapsed();
@@ -75,6 +83,7 @@ fn solve_level(
     print_solution_flag: bool,
     max_nodes_explored: usize,
     heuristic_type: HeuristicType,
+    direction: SearchDirection,
 ) {
     match heuristic_type {
         HeuristicType::Greedy => solve_level_with_heuristic(
@@ -83,6 +92,7 @@ fn solve_level(
             print_solution_flag,
             max_nodes_explored,
             GreedyHeuristic::new(),
+            direction,
         ),
         HeuristicType::Null => solve_level_with_heuristic(
             level_num,
@@ -90,6 +100,7 @@ fn solve_level(
             print_solution_flag,
             max_nodes_explored,
             NullHeuristic::new(),
+            direction,
         ),
     }
 }
@@ -121,6 +132,10 @@ struct Args {
     /// Heuristic to use for solving
     #[arg(short = 'H', long, value_enum, default_value = "greedy")]
     heuristic: HeuristicType,
+
+    /// Search direction (forwards from initial state or backwards from goal state)
+    #[arg(short = 'd', long, value_enum, default_value = "forwards")]
+    direction: Direction,
 }
 
 fn main() {
@@ -167,6 +182,7 @@ fn main() {
             args.print_solution,
             args.max_nodes_explored,
             args.heuristic,
+            args.direction.into(),
         );
     }
 }

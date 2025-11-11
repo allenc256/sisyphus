@@ -24,6 +24,8 @@ cargo run -- levels.xsb 5 --print-solution  # Show step-by-step solution
 cargo run -- levels.xsb 3 -n 10000000  # Set max nodes explored
 cargo run -- levels.xsb 1 -H null      # Use null heuristic (pure iterative deepening)
 cargo run -- levels.xsb 1 -H greedy    # Use greedy heuristic (default)
+cargo run -- levels.xsb 1 -d forwards  # Search forwards from initial state (default)
+cargo run -- levels.xsb 1 -d backwards # Search backwards from goal state
 ```
 
 For better performance, use release mode:
@@ -59,26 +61,34 @@ cargo doc --open     # Build and open documentation
 
 - **game.rs**: Core Sokoban game state representation and logic
   - `Game`: Represents the board state (tiles, player position, box positions, goals)
+  - `PlayerPos`: Enum representing player position as either Known(x, y) or Unknown
   - `Push`: Represents a box push move (box index + direction)
   - `Pushes`: Bitset-based collection of valid pushes
-  - Key methods: `compute_pushes()`, `push()`, `unpush()`, `is_solved()`
+  - Key methods: `compute_pushes()`, `compute_unpushes()`, `push()`, `unpush()`, `is_solved()`, `set_to_goal_state()`
   - Uses position canonicalization: normalizes player position to lexicographically smallest reachable position
+  - Supports both forward pushes and backward unpushes for bidirectional search
 
 - **solver.rs**: IDA* search algorithm implementation
   - Uses iterative deepening with increasing f-cost thresholds
   - Transposition table using Zobrist hashing to avoid revisiting states
   - Node limit to prevent excessive search (default: 5 million)
   - Returns `Option<Vec<Push>>` with solution path or None
+  - Supports both forward search (from initial state) and backward search (from goal state)
+  - `SearchDirection`: Controls whether to search forwards or backwards
+  - `Searcher`: Internal struct that performs A* search up to a threshold
+  - `Solver`: Public API that manages iterative deepening by repeatedly calling Searcher
 
 - **heuristic.rs**: Heuristic functions for A* search
-  - `Heuristic` trait: defines `compute()` method
+  - `Heuristic` trait: defines `compute_forward()` and `compute_backward()` methods
   - `GreedyHeuristic`: Greedy assignment heuristic using Manhattan distance (not admissible)
   - `NullHeuristic`: Returns 0 (reduces to iterative deepening)
+  - Both methods support forward search (estimating distance to goal) and backward search (estimating distance from start)
 
 - **zobrist.rs**: Zobrist hashing for game state identification
   - Pre-generates random hash values for each board position
-  - Separate hash tables for box positions and player positions
+  - Separate hash tables for box positions and player positions (including Unknown positions)
   - Enables efficient incremental hash updates during search
+  - Supports hashing of PlayerPos enum (Known positions and Unknown position)
 
 - **levels.rs**: XSB format level file parsing
   - Parses levels separated by semicolon-prefixed comments or empty lines
@@ -86,13 +96,13 @@ cargo doc --open     # Build and open documentation
 
 ### Important Design Details
 
-1. **State Representation**: Game states are identified by box positions + canonicalized player position (not the actual player position). This significantly reduces the state space.
+1. **State Representation**: Game states are identified by box positions + canonicalized player position (not the actual player position). This significantly reduces the state space. The player position can be either Known(x, y) or Unknown (used for goal states in backward search).
 
-2. **Move Representation**: The solver works with box pushes rather than player moves. Each push implicitly includes the player movement needed to reach the box.
+2. **Move Representation**: The solver works with box pushes rather than player moves. Each push implicitly includes the player movement needed to reach the box. The solver supports both forward pushes (moving boxes toward goals) and backward unpushes (moving boxes away from goals for backward search).
 
 3. **Zobrist Hashing**: Incremental hash updates are used during search. When a box moves, the hash is updated by XORing out the old position hash and XORing in the new position hash.
 
-4. **Transposition Table**: Stores the g-cost (depth) of the first visit to each state. States revisited at equal or greater depth are pruned.
+4. **Transposition Table**: Stores both the parent state hash and g-cost (depth) for each visited state. This enables solution reconstruction by following parent links backwards from the final state. States revisited at equal or greater depth are pruned.
 
 5. **Constants**:
    - `MAX_SIZE = 64`: Maximum board dimension
