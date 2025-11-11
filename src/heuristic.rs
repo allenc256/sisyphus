@@ -32,7 +32,7 @@ impl Heuristic for NullHeuristic {
 pub struct GreedyHeuristic {
     /// goal_distances[goal_idx][y][x] = minimum pushes to get a box from (x, y) to goal goal_idx
     goal_distances: [[[u16; MAX_SIZE]; MAX_SIZE]; MAX_BOXES],
-    /// start_distances[box_idx][y][x] = minimum unpushes to get a box from (x, y) to start position box_idx
+    /// start_distances[box_idx][y][x] = minimum pulls to get a box from (x, y) to start position box_idx
     start_distances: [[[u16; MAX_SIZE]; MAX_SIZE]; MAX_BOXES],
 }
 
@@ -46,18 +46,18 @@ impl GreedyHeuristic {
         }
     }
 
-    /// Compute push distances from each goal to all positions using BFS with unpushes
+    /// Compute push distances from each goal to all positions using BFS with pulls
     fn compute_distances_from_goals(game: &Game) -> [[[u16; MAX_SIZE]; MAX_SIZE]; MAX_BOXES] {
         let mut distances = [[[u16::MAX; MAX_SIZE]; MAX_SIZE]; MAX_BOXES];
 
         for goal_idx in 0..game.box_count() {
-            Self::bfs_unpushes(game, goal_idx, &mut distances[goal_idx]);
+            Self::bfs_pulls(game, goal_idx, &mut distances[goal_idx]);
         }
 
         distances
     }
 
-    /// Compute unpush distances from each start position to all positions using BFS with pushes
+    /// Compute pull distances from each start position to all positions using BFS with pushes
     fn compute_distances_from_starts(game: &Game) -> [[[u16; MAX_SIZE]; MAX_SIZE]; MAX_BOXES] {
         let mut distances = [[[u16::MAX; MAX_SIZE]; MAX_SIZE]; MAX_BOXES];
 
@@ -68,8 +68,8 @@ impl GreedyHeuristic {
         distances
     }
 
-    /// BFS using unpushes to compute distances from a goal position
-    fn bfs_unpushes(game: &Game, goal_idx: usize, distances: &mut [[u16; MAX_SIZE]; MAX_SIZE]) {
+    /// BFS using pulls to compute distances from a goal position
+    fn bfs_pulls(game: &Game, goal_idx: usize, distances: &mut [[u16; MAX_SIZE]; MAX_SIZE]) {
         let start_pos = game.goal_pos(goal_idx);
         let mut queue = VecDeque::new();
         queue.push_back((start_pos.0, start_pos.1));

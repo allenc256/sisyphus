@@ -5,7 +5,7 @@ mod solver;
 mod zobrist;
 
 use clap::{Parser, ValueEnum};
-use game::{Game, PushByPos};
+use game::{Game, MoveByPos};
 use heuristic::{GreedyHeuristic, Heuristic, NullHeuristic};
 use levels::Levels;
 use solver::{SearchType, SolveResult, Solver};
@@ -34,7 +34,7 @@ impl From<Direction> for SearchType {
     }
 }
 
-fn print_solution(game: &Game, solution: &[PushByPos]) {
+fn print_solution(game: &Game, solution: &[MoveByPos]) {
     println!("\nStarting position:\n{}", game);
     let mut game = game.clone();
     let mut count = 0;

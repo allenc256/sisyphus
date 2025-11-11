@@ -1,4 +1,4 @@
-use crate::game::{Game, PlayerPos, Push, PushByPos, Pushes};
+use crate::game::{Game, Move, MoveByPos, Moves, PlayerPos};
 use crate::heuristic::Heuristic;
 use crate::zobrist::Zobrist;
 use std::collections::HashMap;
@@ -21,7 +21,7 @@ enum SearchResult {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SolveResult {
     /// Puzzle was solved
-    Solved(Vec<PushByPos>),
+    Solved(Vec<MoveByPos>),
     /// Node limit exceeded before solution found
     Cutoff,
     /// Puzzle is impossible to solve
@@ -162,7 +162,7 @@ impl<H: Heuristic> Searcher<H> {
         }
 
         // Get all valid pushes and canonical position
-        let (pushes, canonical_pos) = self.compute_moves(game);
+        let (moves, canonical_pos) = self.compute_moves(game);
 
         // Hash in the canonical player position
         let curr_hash = boxes_hash ^ self.zobrist.player_hash(canonical_pos);
@@ -190,10 +190,10 @@ impl<H: Heuristic> Searcher<H> {
         }
 
         // Try each push
-        for push in &pushes {
-            let old_box_pos = game.box_pos(push.box_index as usize);
-            self.apply_move(game, push);
-            let new_box_pos = game.box_pos(push.box_index as usize);
+        for move_ in &moves {
+            let old_box_pos = game.box_pos(move_.box_index as usize);
+            self.apply_move(game, move_);
+            let new_box_pos = game.box_pos(move_.box_index as usize);
 
             // Update boxes hash (unhash old position, hash new position)
             let new_boxes_hash = boxes_hash
@@ -212,7 +212,7 @@ impl<H: Heuristic> Searcher<H> {
                 return result;
             }
 
-            self.unapply_move(game, push);
+            self.unapply_move(game, move_);
 
             if result == SearchResult::Cutoff {
                 return SearchResult::Cutoff;
@@ -226,7 +226,7 @@ impl<H: Heuristic> Searcher<H> {
         SearchResult::Exceeded
     }
 
-    fn reconstruct_solution(&self, final_game: &Game) -> Vec<PushByPos> {
+    fn reconstruct_solution(&self, final_game: &Game) -> Vec<MoveByPos> {
         let mut solution = Vec::new();
         let mut current_game = final_game.clone();
         let mut current_hash = self.zobrist.compute_hash(&current_game);
@@ -245,10 +245,10 @@ impl<H: Heuristic> Searcher<H> {
 
             let target_parent_hash = entry.parent_hash;
 
-            // Compute all possible unpushes from current state
+            // Compute all possible unmoves from current state
             let (unmoves, _canonical_pos) = self.compute_unmoves(&current_game);
 
-            // Try each unpush to find which one leads to parent state
+            // Try each unmove to find which one leads to parent state
             let mut found = false;
             for unmove in &unmoves {
                 let old_box_pos = current_game.box_pos(unmove.box_index as usize);
@@ -260,7 +260,7 @@ impl<H: Heuristic> Searcher<H> {
 
                 // Check if this matches the parent we're looking for
                 if prev_hash == target_parent_hash {
-                    solution.push(PushByPos {
+                    solution.push(MoveByPos {
                         box_pos: match self.direction {
                             SearchDirection::Forwards => new_box_pos,
                             SearchDirection::Backwards => old_box_pos,
@@ -272,13 +272,13 @@ impl<H: Heuristic> Searcher<H> {
                     break;
                 }
 
-                // Redo the unpush if it wasn't correct
+                // Redo the unmove if it wasn't correct
                 self.apply_move(&mut current_game, unmove);
             }
 
             assert!(
                 found,
-                "Failed to reconstruct solution: no unpush leads to parent state"
+                "Failed to reconstruct solution: no unmove leads to parent state"
             );
         }
 
@@ -293,31 +293,31 @@ impl<H: Heuristic> Searcher<H> {
         }
     }
 
-    fn compute_moves(&self, game: &Game) -> (Pushes, PlayerPos) {
+    fn compute_moves(&self, game: &Game) -> (Moves, PlayerPos) {
         match self.direction {
             SearchDirection::Forwards => game.compute_pushes(),
-            SearchDirection::Backwards => game.compute_unpushes(),
+            SearchDirection::Backwards => game.compute_pulls(),
         }
     }
 
-    fn compute_unmoves(&self, game: &Game) -> (Pushes, PlayerPos) {
+    fn compute_unmoves(&self, game: &Game) -> (Moves, PlayerPos) {
         match self.direction {
-            SearchDirection::Forwards => game.compute_unpushes(),
+            SearchDirection::Forwards => game.compute_pulls(),
             SearchDirection::Backwards => game.compute_pushes(),
         }
     }
 
-    fn apply_move(&self, game: &mut Game, push: Push) {
+    fn apply_move(&self, game: &mut Game, move_: Move) {
         match self.direction {
-            SearchDirection::Forwards => game.push(push),
-            SearchDirection::Backwards => game.unpush(push),
+            SearchDirection::Forwards => game.push(move_),
+            SearchDirection::Backwards => game.pull(move_),
         }
     }
 
-    fn unapply_move(&self, game: &mut Game, push: Push) {
+    fn unapply_move(&self, game: &mut Game, move_: Move) {
         match self.direction {
-            SearchDirection::Forwards => game.unpush(push),
-            SearchDirection::Backwards => game.push(push),
+            SearchDirection::Forwards => game.pull(move_),
+            SearchDirection::Backwards => game.push(move_),
         }
     }
 }
@@ -407,7 +407,7 @@ impl<H: Heuristic> Solver<H> {
         self.forwards.nodes_explored() + self.backwards.nodes_explored()
     }
 
-    fn verify_solution(&self, solution: &[PushByPos]) {
+    fn verify_solution(&self, solution: &[MoveByPos]) {
         let mut test_game = (*self.forwards.initial_game).clone();
 
         for (i, push) in solution.iter().enumerate() {
@@ -427,7 +427,7 @@ impl<H: Heuristic> Solver<H> {
             let (valid_pushes, _canonical_pos) = test_game.compute_pushes();
 
             // Verify that this push is among the valid pushes
-            let index_push = Push {
+            let index_push = Move {
                 box_index,
                 direction: push.direction,
             };

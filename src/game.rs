@@ -73,27 +73,27 @@ impl fmt::Display for Direction {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub struct Push {
+pub struct Move {
     pub box_index: u8,
     pub direction: Direction,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct PushByPos {
+pub struct MoveByPos {
     pub box_pos: (u8, u8),
     pub direction: Direction,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Pushes {
+pub struct Moves {
     // Bitset: bits[0] = Up for all boxes, bits[1] = Down, bits[2] = Left, bits[3] = Right
     // Each u32 holds 32 bits for 32 boxes
     bits: [u32; 4],
 }
 
-impl Pushes {
+impl Moves {
     fn new() -> Self {
-        Pushes { bits: [0; 4] }
+        Moves { bits: [0; 4] }
     }
 
     fn add(&mut self, box_index: u8, direction: Direction) {
@@ -112,13 +112,13 @@ impl Pushes {
         self.bits.iter().all(|&word| word == 0)
     }
 
-    pub fn contains(&self, push: Push) -> bool {
+    pub fn contains(&self, push: Move) -> bool {
         let dir_idx = push.direction.index();
         (self.bits[dir_idx] & (1u32 << push.box_index)) != 0
     }
 
-    pub fn iter(&self) -> PushesIter {
-        PushesIter {
+    pub fn iter(&self) -> MovesIter {
+        MovesIter {
             moves: self,
             dir_idx: 0,
             box_bits: self.bits[0],
@@ -126,14 +126,14 @@ impl Pushes {
     }
 }
 
-pub struct PushesIter<'a> {
-    moves: &'a Pushes,
+pub struct MovesIter<'a> {
+    moves: &'a Moves,
     dir_idx: usize,
     box_bits: u32,
 }
 
-impl Iterator for PushesIter<'_> {
-    type Item = Push;
+impl Iterator for MovesIter<'_> {
+    type Item = Move;
 
     fn next(&mut self) -> Option<Self::Item> {
         loop {
@@ -143,7 +143,7 @@ impl Iterator for PushesIter<'_> {
                 self.box_bits &= self.box_bits - 1; // Clear lowest set bit
 
                 let direction = Direction::from_index(self.dir_idx);
-                return Some(Push {
+                return Some(Move {
                     box_index,
                     direction,
                 });
@@ -159,9 +159,9 @@ impl Iterator for PushesIter<'_> {
     }
 }
 
-impl<'a> IntoIterator for &'a Pushes {
-    type Item = Push;
-    type IntoIter = PushesIter<'a>;
+impl<'a> IntoIterator for &'a Moves {
+    type Item = Move;
+    type IntoIter = MovesIter<'a>;
 
     fn into_iter(self) -> Self::IntoIter {
         self.iter()
@@ -408,10 +408,10 @@ impl Game {
         }
     }
 
-    /// Push a box according to the given Push.
+    /// Pushes a box.
     /// Updates the player position to where the box was.
     /// Panics if the push is invalid (invalid box index, destination blocked, etc.)
-    pub fn push(&mut self, push: Push) {
+    pub fn push(&mut self, push: Move) {
         assert!(
             (push.box_index as usize) < self.boxes.count as usize,
             "Invalid box index: {}",
@@ -450,42 +450,37 @@ impl Game {
         self.player = PlayerPos::Known(x, y);
     }
 
-    /// Push a box identified by its position.
-    /// Panics if there is no box at the given position.
-    pub fn push_by_pos(&mut self, push: PushByPos) {
+    pub fn push_by_pos(&mut self, push: MoveByPos) {
         let (x, y) = push.box_pos;
         let box_index = self
             .box_at(x, y)
             .unwrap_or_else(|| panic!("No box at position ({}, {})", x, y));
 
-        self.push(Push {
+        self.push(Move {
             box_index,
             direction: push.direction,
         });
     }
 
-    /// Undo a push operation.
-    /// Moves the box back in the opposite direction and restores player position.
-    /// Panics if the unpush is invalid (invalid box index).
-    pub fn unpush(&mut self, push: Push) {
+    pub fn pull(&mut self, pull: Move) {
         assert!(
-            (push.box_index as usize) < self.boxes.count as usize,
+            (pull.box_index as usize) < self.boxes.count as usize,
             "Invalid box index: {}",
-            push.box_index
+            pull.box_index
         );
 
         // Current box position (after the push we're undoing)
-        let (new_x, new_y) = self.boxes.positions[push.box_index as usize];
+        let (new_x, new_y) = self.boxes.positions[pull.box_index as usize];
 
         // Calculate where box came from (opposite direction)
         let (old_x, old_y) = self
-            .unmove_pos(new_x, new_y, push.direction)
-            .expect("Unpush source out of bounds");
+            .unmove_pos(new_x, new_y, pull.direction)
+            .expect("Pull source out of bounds");
 
         // Calculate where player was before the push
         let (player_old_x, player_old_y) = self
-            .unmove_pos(old_x, old_y, push.direction)
-            .expect("Unpush player position out of bounds");
+            .unmove_pos(old_x, old_y, pull.direction)
+            .expect("Pull player position out of bounds");
 
         let current_tile = self.get_tile(new_x, new_y);
         let old_tile = self.get_tile(old_x, old_y);
@@ -562,17 +557,17 @@ impl Game {
     /// Returns the pushes and the canonicalized (lexicographically smallest) player position.
     /// If the game is already solved, returns empty pushes and Unknown player position.
     /// Panics if the player position is Unknown (and game is not solved).
-    pub fn compute_pushes(&self) -> (Pushes, PlayerPos) {
+    pub fn compute_pushes(&self) -> (Moves, PlayerPos) {
         // Short-circuit if already solved
         if self.is_solved() {
-            return (Pushes::new(), PlayerPos::Unknown);
+            return (Moves::new(), PlayerPos::Unknown);
         }
 
         let PlayerPos::Known(x, y) = self.player else {
             panic!("Cannot compute pushes when player position is unknown");
         };
 
-        let mut pushes = Pushes::new();
+        let mut pushes = Moves::new();
         let mut reachable = [[false; MAX_SIZE]; MAX_SIZE];
         let canonical_pos = self.player_dfs((x, y), &mut reachable, |_player_pos, dir, box_idx| {
             // For pushes: check if the box can move forward in the direction
@@ -589,20 +584,18 @@ impl Game {
         (pushes, PlayerPos::Known(canonical_pos.0, canonical_pos.1))
     }
 
-    /// Compute all possible unpushes from the current game state.
-    /// An unpush reverses a push operation - useful for backward search from goal states.
-    /// Returns the unpushes and the canonicalized (lexicographically smallest) player position.
-    /// If player position is Unknown, computes unpushes from all possible player positions
+    /// Compute all possible pulls from the current game state.
+    /// Returns the pulls and the canonicalized (lexicographically smallest) player position.
+    /// If player position is Unknown, computes pulls from all possible player positions
     /// and returns Unknown as the canonical position.
-    pub fn compute_unpushes(&self) -> (Pushes, PlayerPos) {
-        let mut pushes = Pushes::new();
+    pub fn compute_pulls(&self) -> (Moves, PlayerPos) {
+        let mut pulls = Moves::new();
         let mut reachable = [[false; MAX_SIZE]; MAX_SIZE];
 
         match self.player {
             PlayerPos::Known(x, y) => {
-                let canonical_pos =
-                    self.compute_unpushes_helper((x, y), &mut reachable, &mut pushes);
-                (pushes, PlayerPos::Known(canonical_pos.0, canonical_pos.1))
+                let canonical_pos = self.compute_pulls_helper((x, y), &mut reachable, &mut pulls);
+                (pulls, PlayerPos::Known(canonical_pos.0, canonical_pos.1))
             }
             PlayerPos::Unknown => {
                 assert!(self.is_solved());
@@ -618,23 +611,23 @@ impl Game {
                         if (tile == Tile::Floor || tile == Tile::Goal)
                             && !self.boxes.has_box_at(x, y)
                         {
-                            self.compute_unpushes_helper((x, y), &mut reachable, &mut pushes);
+                            self.compute_pulls_helper((x, y), &mut reachable, &mut pulls);
                         }
                     }
                 }
-                (pushes, PlayerPos::Unknown)
+                (pulls, PlayerPos::Unknown)
             }
         }
     }
 
-    fn compute_unpushes_helper(
+    fn compute_pulls_helper(
         &self,
         player: (u8, u8),
         reachable: &mut [[bool; MAX_SIZE]; MAX_SIZE],
-        pushes: &mut Pushes,
+        pulls: &mut Moves,
     ) -> (u8, u8) {
         self.player_dfs(player, reachable, |(x, y), dir, box_idx| {
-            // For unpush: box at (nx, ny), player at (x, y)
+            // For pull: box at (nx, ny), player at (x, y)
             // Box moves to (x, y), player moves to (x, y) - dir
             // Check if player destination is free
             if let Some((dest_x, dest_y)) = self.unmove_pos(x, y, dir) {
@@ -642,7 +635,7 @@ impl Game {
                 if !self.boxes.has_box_at(dest_x, dest_y)
                     && (dest_tile == Tile::Floor || dest_tile == Tile::Goal)
                 {
-                    pushes.add(box_idx, dir);
+                    pulls.add(box_idx, dir);
                 }
             }
         })
@@ -887,7 +880,7 @@ mod tests {
 
         // Push box right (box at position (2,1) is box index 0)
         let box_idx = game.boxes.index[1][2];
-        game.push(Push {
+        game.push(Move {
             box_index: box_idx,
             direction: Direction::Right,
         });
@@ -914,7 +907,7 @@ mod tests {
                      ####";
         let mut game = Game::from_text(input).unwrap();
         let box_idx = game.boxes.index[1][2];
-        game.push(Push {
+        game.push(Move {
             box_index: box_idx,
             direction: Direction::Right,
         });
@@ -929,7 +922,7 @@ mod tests {
                      #####";
         let mut game = Game::from_text(input).unwrap();
         let box_idx = game.boxes.index[2][2];
-        game.push(Push {
+        game.push(Move {
             box_index: box_idx,
             direction: Direction::Down,
         });
@@ -944,7 +937,7 @@ mod tests {
                      ####";
         let mut game = Game::from_text(input).unwrap();
         let box_idx = game.boxes.index[1][2];
-        game.push(Push {
+        game.push(Move {
             box_index: box_idx,
             direction: Direction::Left,
         });
@@ -959,7 +952,7 @@ mod tests {
                      #####";
         let mut game = Game::from_text(input).unwrap();
         let box_idx = game.boxes.index[2][2];
-        game.push(Push {
+        game.push(Move {
             box_index: box_idx,
             direction: Direction::Up,
         });
@@ -978,7 +971,7 @@ mod tests {
 
         assert_eq!(game.empty_goals, 1);
         let box_idx = game.boxes.index[1][2];
-        game.push(Push {
+        game.push(Move {
             box_index: box_idx,
             direction: Direction::Right,
         });
@@ -1001,7 +994,7 @@ mod tests {
         assert!(game.boxes.has_box_at(2, 1));
 
         let box_idx = game.boxes.index[1][2];
-        game.push(Push {
+        game.push(Move {
             box_index: box_idx,
             direction: Direction::Right,
         });
@@ -1024,7 +1017,7 @@ mod tests {
 
         assert_eq!(game.empty_goals, 1);
         let box_idx = game.boxes.index[1][2];
-        game.push(Push {
+        game.push(Move {
             box_index: box_idx,
             direction: Direction::Right,
         });
@@ -1045,7 +1038,7 @@ mod tests {
         let mut game = Game::from_text(input).unwrap();
 
         // Try to push with invalid box index
-        game.push(Push {
+        game.push(Move {
             box_index: 10,
             direction: Direction::Right,
         });
@@ -1062,7 +1055,7 @@ mod tests {
 
         // Try to push box into wall
         let box_idx = game.boxes.index[1][2];
-        game.push(Push {
+        game.push(Move {
             box_index: box_idx,
             direction: Direction::Right,
         });
@@ -1079,7 +1072,7 @@ mod tests {
 
         // Try to push box into another box
         let box_idx = game.boxes.index[1][2];
-        game.push(Push {
+        game.push(Move {
             box_index: box_idx,
             direction: Direction::Right,
         });
@@ -1098,19 +1091,19 @@ mod tests {
         let (pushes, canonical_pos) = game.compute_pushes();
         let mut actual = pushes.iter().collect::<Vec<_>>();
         let mut expected = vec![
-            Push {
+            Move {
                 box_index: 0,
                 direction: Direction::Up,
             },
-            Push {
+            Move {
                 box_index: 0,
                 direction: Direction::Down,
             },
-            Push {
+            Move {
                 box_index: 1,
                 direction: Direction::Left,
             },
-            Push {
+            Move {
                 box_index: 1,
                 direction: Direction::Right,
             },
@@ -1126,17 +1119,17 @@ mod tests {
     }
 
     #[test]
-    fn test_compute_unpushes() {
+    fn test_compute_pulls() {
         // Test with a box that could have been pushed from the left
         let input = "#####\n\
                      # $+ #\n\
                      #####";
         let game = Game::from_text(input).unwrap();
-        let (unpushes, canonical_pos) = game.compute_unpushes();
-        let actual = unpushes.iter().collect::<Vec<_>>();
+        let (pulls, canonical_pos) = game.compute_pulls();
+        let actual = pulls.iter().collect::<Vec<_>>();
         assert_eq!(
             actual,
-            vec![Push {
+            vec![Move {
                 box_index: 0,
                 direction: Direction::Left
             }]
@@ -1145,21 +1138,21 @@ mod tests {
     }
 
     #[test]
-    fn test_compute_initial_unpushes() {
+    fn test_compute_initial_pulls() {
         let input = "#######\n\
                      #@ *  #\n\
                      #######";
         let game = Game::from_text(input).unwrap().make_goal_state();
-        let (unpushes, canonical_pos) = game.compute_unpushes();
-        let mut actual = unpushes.iter().collect::<Vec<_>>();
+        let (pulls, canonical_pos) = game.compute_pulls();
+        let mut actual = pulls.iter().collect::<Vec<_>>();
         actual.sort();
 
         let mut expected = vec![
-            Push {
+            Move {
                 box_index: 0,
                 direction: Direction::Left,
             },
-            Push {
+            Move {
                 box_index: 0,
                 direction: Direction::Right,
             },
@@ -1170,8 +1163,8 @@ mod tests {
     }
 
     #[test]
-    fn test_unpush() {
-        // Test unpush restores original state
+    fn test_pull() {
+        // Test pull restores original state
         let input = "####\n\
                      #@$.#\n\
                      ####";
@@ -1184,7 +1177,7 @@ mod tests {
 
         // Push box right
         let box_idx = game.boxes.index[1][2];
-        let push = Push {
+        let push = Move {
             box_index: box_idx,
             direction: Direction::Right,
         };
@@ -1196,8 +1189,8 @@ mod tests {
         assert_eq!(game.empty_goals, 0);
         assert!(game.is_solved());
 
-        // Unpush
-        game.unpush(push);
+        // Pull
+        game.pull(push);
 
         // Should be back to original state
         assert_eq!(game.player, original_player);
@@ -1207,8 +1200,8 @@ mod tests {
     }
 
     #[test]
-    fn test_unpush_all_directions() {
-        // Test unpush in all directions
+    fn test_pull_all_directions() {
+        // Test pull in all directions
         let tests = vec![
             (Direction::Right, "####\n#@$ #\n# . #\n####"),
             (Direction::Down, "#####\n# @ #\n# $ #\n# . #\n#####"),
@@ -1224,13 +1217,13 @@ mod tests {
             let box_idx = game.boxes.positions[0];
             let box_idx = game.boxes.index[box_idx.1 as usize][box_idx.0 as usize];
 
-            let push = Push {
+            let push = Move {
                 box_index: box_idx,
                 direction,
             };
 
             game.push(push);
-            game.unpush(push);
+            game.pull(push);
 
             assert_eq!(game.player, original.player, "Failed for {:?}", direction);
             assert_eq!(game.boxes, original.boxes, "Failed for {:?}", direction);
