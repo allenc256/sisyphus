@@ -140,8 +140,8 @@ struct Args {
     #[arg(short = 'H', long, value_enum, default_value = "greedy")]
     heuristic: HeuristicType,
 
-    /// Search type (forwards, backwards, or bidirectional)
-    #[arg(short = 'd', long, value_enum, default_value = "forwards")]
+    /// Search type
+    #[arg(short = 'd', long, value_enum, default_value = "bidirectional")]
     direction: Direction,
 }
 

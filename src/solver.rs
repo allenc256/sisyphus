@@ -8,7 +8,7 @@ use std::rc::Rc;
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum SearchResult {
     /// Solution found
-    Solved(Vec<PushByPos>),
+    Solved(Box<Game>),
     /// No solution at this threshold
     Exceeded,
     /// Node limit exceeded
@@ -44,6 +44,7 @@ struct Searcher<H: Heuristic> {
     heuristic: H,
     direction: SearchDirection,
     initial_game: Rc<Game>,
+    initial_hash: u64,
     initial_boxes_hash: u64,
 }
 
@@ -74,9 +75,10 @@ impl<H: Heuristic> Searcher<H> {
         heuristic: H,
         direction: SearchDirection,
         initial_game: Rc<Game>,
-        initial_boxes_hash: u64,
     ) -> Self {
-        Searcher {
+        let initial_hash = zobrist.compute_hash(&initial_game);
+        let initial_boxes_hash = zobrist.compute_boxes_hash(&initial_game);
+        let mut searcher = Searcher {
             nodes_explored: 0,
             max_nodes_explored,
             table: HashMap::new(),
@@ -84,8 +86,11 @@ impl<H: Heuristic> Searcher<H> {
             heuristic,
             direction,
             initial_game,
+            initial_hash,
             initial_boxes_hash,
-        }
+        };
+        searcher.reset();
+        searcher
     }
 
     fn nodes_explored(&self) -> usize {
@@ -99,7 +104,7 @@ impl<H: Heuristic> Searcher<H> {
         F: Fn(u64) -> bool,
     {
         let mut game = (*self.initial_game).clone();
-        self.table.clear();
+        self.reset();
         self.search_helper(
             &mut game,
             0,
@@ -108,6 +113,22 @@ impl<H: Heuristic> Searcher<H> {
             self.initial_boxes_hash,
             0,
         )
+    }
+
+    fn reset(&mut self) {
+        self.table.clear();
+
+        // Important: bidirectional search relies on the invariant that the
+        // transposition table always contains the initial state (since when
+        // we're doing a forward search we're checking the backward search's
+        // table to see if we've finished, and vice versa).
+        self.table.insert(
+            self.initial_hash,
+            TableEntry {
+                parent_hash: 0,
+                g_cost: 0,
+            },
+        );
     }
 
     /// Perform DFS A* search up to the specified threshold
@@ -149,7 +170,7 @@ impl<H: Heuristic> Searcher<H> {
         // Check transposition table
         if let Some(entry) = self.table.get(&curr_hash) {
             // Skip if we've seen this state at a shallower or equal g-cost
-            if g_cost >= entry.g_cost {
+            if g_cost > 0 && g_cost >= entry.g_cost {
                 return SearchResult::Exceeded;
             }
         }
@@ -165,7 +186,7 @@ impl<H: Heuristic> Searcher<H> {
 
         // Check if we've reached the target (after adding to transposition table)
         if target_check(curr_hash) {
-            return SearchResult::Solved(self.reconstruct_solution(&game));
+            return SearchResult::Solved(Box::new(game.clone()));
         }
 
         // Try each push
@@ -311,12 +332,10 @@ impl<H: Heuristic> Solver<H> {
         let zobrist = Rc::new(Zobrist::new());
 
         let forwards_game = Rc::new(game.clone());
+
         let mut backwards_game = game.clone();
         backwards_game.set_to_goal_state();
         let backwards_game = Rc::new(backwards_game);
-
-        let forwards_boxes_hash = zobrist.compute_boxes_hash(&forwards_game);
-        let backwards_boxes_hash = zobrist.compute_boxes_hash(&backwards_game);
 
         Solver {
             forwards: Searcher::new(
@@ -325,7 +344,6 @@ impl<H: Heuristic> Solver<H> {
                 heuristic.clone(),
                 SearchDirection::Forwards,
                 forwards_game,
-                forwards_boxes_hash,
             ),
             backwards: Searcher::new(
                 zobrist,
@@ -333,48 +351,57 @@ impl<H: Heuristic> Solver<H> {
                 heuristic,
                 SearchDirection::Backwards,
                 backwards_game,
-                backwards_boxes_hash,
             ),
             search_type,
         }
     }
 
-    /// Solve the game using IDA* (Iterative Deepening A*)
     pub fn solve(&mut self) -> SolveResult {
-        match self.search_type {
-            SearchType::Forwards => self.solve_helper(SearchDirection::Forwards),
-            SearchType::Backwards => self.solve_helper(SearchDirection::Backwards),
-            SearchType::Bidirectional => todo!(),
-        }
-    }
-
-    fn solve_helper(&mut self, direction: SearchDirection) -> SolveResult {
-        let (searcher, rev_searcher) = match direction {
-            SearchDirection::Forwards => (&mut self.forwards, &self.backwards),
-            SearchDirection::Backwards => (&mut self.backwards, &self.forwards),
-        };
-
-        let target_hash = searcher.zobrist.compute_hash(&rev_searcher.initial_game);
-        let mut threshold = searcher.compute_heuristic(&searcher.initial_game);
+        let mut forwards_threshold = 0;
+        let mut backwards_threshold = 0;
 
         loop {
-            match searcher.search(threshold, &|hash| hash == target_hash) {
-                SearchResult::Solved(mut solution) => {
-                    if direction == SearchDirection::Backwards {
-                        solution.reverse();
-                    }
-                    self.verify_solution(&solution);
-                    return SolveResult::Solved(solution);
+            let is_forwards = match self.search_type {
+                SearchType::Forwards => true,
+                SearchType::Backwards => false,
+                SearchType::Bidirectional => {
+                    self.forwards.nodes_explored() <= self.backwards.nodes_explored()
                 }
-                SearchResult::Exceeded => {
-                    threshold += 1;
+            };
+
+            let (active, inactive) = if is_forwards {
+                (&mut self.forwards, &mut self.backwards)
+            } else {
+                (&mut self.backwards, &mut self.forwards)
+            };
+
+            let threshold = if is_forwards {
+                &mut forwards_threshold
+            } else {
+                &mut backwards_threshold
+            };
+
+            match active.search(*threshold, &|hash| inactive.table.contains_key(&hash)) {
+                SearchResult::Solved(final_game) => {
+                    let (mut forwards_soln, mut backwards_soln) = if is_forwards {
+                        (
+                            active.reconstruct_solution(&final_game),
+                            inactive.reconstruct_solution(&final_game),
+                        )
+                    } else {
+                        (
+                            inactive.reconstruct_solution(&final_game),
+                            active.reconstruct_solution(&final_game),
+                        )
+                    };
+                    backwards_soln.reverse();
+                    forwards_soln.extend_from_slice(&backwards_soln);
+                    self.verify_solution(&forwards_soln);
+                    return SolveResult::Solved(forwards_soln);
                 }
-                SearchResult::Cutoff => {
-                    return SolveResult::Cutoff;
-                }
-                SearchResult::Impossible => {
-                    return SolveResult::Impossible;
-                }
+                SearchResult::Exceeded => *threshold += 1,
+                SearchResult::Cutoff => return SolveResult::Cutoff,
+                SearchResult::Impossible => return SolveResult::Impossible,
             }
         }
     }
