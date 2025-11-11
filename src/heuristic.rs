@@ -1,7 +1,8 @@
-use crate::game::{Game, MAX_BOXES};
+use crate::game::{ALL_DIRECTIONS, Game, MAX_BOXES, MAX_SIZE, Tile};
+use std::collections::VecDeque;
 
 /// Trait for computing heuristics that estimate the number of pushes needed to solve a game.
-pub trait Heuristic: Clone {
+pub trait Heuristic {
     /// Compute estimated number of pushes needed to complete the game from the current state.
     fn compute_forward(&self, game: &Game) -> usize;
 
@@ -9,7 +10,6 @@ pub trait Heuristic: Clone {
     fn compute_backward(&self, game: &Game) -> usize;
 }
 
-#[derive(Clone)]
 pub struct NullHeuristic;
 
 impl NullHeuristic {
@@ -28,97 +28,137 @@ impl Heuristic for NullHeuristic {
     }
 }
 
-/// A heuristic based on greedy matching of boxes to goals using Manhattan distance.
-/// This heuristic is not admissible, so using it may produce sub-optimal solutions.
-#[derive(Clone)]
-pub struct GreedyHeuristic;
+/// A heuristic based on greedy matching of boxes to goals using precomputed push distances.
+pub struct GreedyHeuristic {
+    /// goal_distances[goal_idx][y][x] = minimum pushes to get a box from (x, y) to goal goal_idx
+    goal_distances: [[[u16; MAX_SIZE]; MAX_SIZE]; MAX_BOXES],
+    /// start_distances[box_idx][y][x] = minimum unpushes to get a box from (x, y) to start position box_idx
+    start_distances: [[[u16; MAX_SIZE]; MAX_SIZE]; MAX_BOXES],
+}
 
 impl GreedyHeuristic {
-    pub fn new() -> Self {
-        GreedyHeuristic
+    pub fn new(game: &Game) -> Self {
+        let goal_distances = Self::compute_distances_from_goals(game);
+        let start_distances = Self::compute_distances_from_starts(game);
+        GreedyHeuristic {
+            goal_distances,
+            start_distances,
+        }
     }
 
-    fn manhattan_distance(pos1: (u8, u8), pos2: (u8, u8)) -> usize {
-        let dx = (pos1.0 as i32 - pos2.0 as i32).abs();
-        let dy = (pos1.1 as i32 - pos2.1 as i32).abs();
-        (dx + dy) as usize
+    /// Compute push distances from each goal to all positions using BFS with unpushes
+    fn compute_distances_from_goals(game: &Game) -> [[[u16; MAX_SIZE]; MAX_SIZE]; MAX_BOXES] {
+        let mut distances = [[[u16::MAX; MAX_SIZE]; MAX_SIZE]; MAX_BOXES];
+
+        for goal_idx in 0..game.box_count() {
+            Self::bfs_unpushes(game, goal_idx, &mut distances[goal_idx]);
+        }
+
+        distances
     }
 
-    fn greedy_distance(
-        src_positions: &mut [(u8, u8); MAX_BOXES],
-        dst_positions: &mut [(u8, u8); MAX_BOXES],
-        unmatched_count: usize,
-    ) -> usize {
-        let mut total_distance = 0;
-        let mut unmatched_count = unmatched_count;
+    /// Compute unpush distances from each start position to all positions using BFS with pushes
+    fn compute_distances_from_starts(game: &Game) -> [[[u16; MAX_SIZE]; MAX_SIZE]; MAX_BOXES] {
+        let mut distances = [[[u16::MAX; MAX_SIZE]; MAX_SIZE]; MAX_BOXES];
 
-        // Greedy matching: repeatedly find and match the closest src-dst pair
-        #[allow(clippy::needless_range_loop)]
-        while unmatched_count > 0 {
-            let mut min_distance = usize::MAX;
-            let mut best_src_idx = 0;
-            let mut best_dst_idx = 0;
+        for box_idx in 0..game.box_count() {
+            Self::bfs_pushes(game, box_idx, &mut distances[box_idx]);
+        }
 
-            // Find the closest unmatched src-dst pair
-            for src_i in 0..unmatched_count {
-                let src_pos = src_positions[src_i];
+        distances
+    }
 
-                for dst_i in 0..unmatched_count {
-                    let dst_pos = dst_positions[dst_i];
-                    let distance = Self::manhattan_distance(src_pos, dst_pos);
+    /// BFS using unpushes to compute distances from a goal position
+    fn bfs_unpushes(game: &Game, goal_idx: usize, distances: &mut [[u16; MAX_SIZE]; MAX_SIZE]) {
+        let start_pos = game.goal_pos(goal_idx);
+        let mut queue = VecDeque::new();
+        queue.push_back((start_pos.0, start_pos.1));
+        distances[start_pos.1 as usize][start_pos.0 as usize] = 0;
 
-                    if distance < min_distance {
-                        min_distance = distance;
-                        best_src_idx = src_i;
-                        best_dst_idx = dst_i;
+        while let Some((box_x, box_y)) = queue.pop_front() {
+            let dist = distances[box_y as usize][box_x as usize];
+
+            for direction in ALL_DIRECTIONS {
+                if let Some((new_box_x, new_box_y)) = game.unmove_pos(box_x, box_y, direction) {
+                    if let Some((player_x, player_y)) =
+                        game.unmove_pos(new_box_x, new_box_y, direction)
+                    {
+                        let new_box_tile = game.get_tile(new_box_x, new_box_y);
+                        let player_tile = game.get_tile(player_x, player_y);
+
+                        if (new_box_tile == Tile::Floor || new_box_tile == Tile::Goal)
+                            && (player_tile == Tile::Floor || player_tile == Tile::Goal)
+                            && distances[new_box_y as usize][new_box_x as usize] == u16::MAX
+                        {
+                            distances[new_box_y as usize][new_box_x as usize] = dist + 1;
+                            queue.push_back((new_box_x, new_box_y));
+                        }
                     }
                 }
             }
+        }
+    }
 
-            // Add distance to total
-            total_distance += min_distance;
+    /// BFS using pushes to compute distances from a box start position
+    fn bfs_pushes(game: &Game, box_idx: usize, distances: &mut [[u16; MAX_SIZE]; MAX_SIZE]) {
+        let start_pos = game.box_start_pos(box_idx);
+        let mut queue = VecDeque::new();
+        queue.push_back((start_pos.0, start_pos.1));
+        distances[start_pos.1 as usize][start_pos.0 as usize] = 0;
 
-            // Remove matched box and goal using swap with last element
-            unmatched_count -= 1;
-            src_positions[best_src_idx] = src_positions[unmatched_count];
-            dst_positions[best_dst_idx] = dst_positions[unmatched_count];
+        while let Some((box_x, box_y)) = queue.pop_front() {
+            let dist = distances[box_y as usize][box_x as usize];
+
+            for direction in ALL_DIRECTIONS {
+                if let Some((new_box_x, new_box_y)) = game.move_pos(box_x, box_y, direction) {
+                    if let Some((player_x, player_y)) = game.unmove_pos(box_x, box_y, direction) {
+                        let new_box_tile = game.get_tile(new_box_x, new_box_y);
+                        let player_tile = game.get_tile(player_x, player_y);
+
+                        if (new_box_tile == Tile::Floor || new_box_tile == Tile::Goal)
+                            && (player_tile == Tile::Floor || player_tile == Tile::Goal)
+                            && distances[new_box_y as usize][new_box_x as usize] == u16::MAX
+                        {
+                            distances[new_box_y as usize][new_box_x as usize] = dist + 1;
+                            queue.push_back((new_box_x, new_box_y));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    fn greedy_distance(game: &Game, distances: &[[[u16; MAX_SIZE]; MAX_SIZE]; MAX_BOXES]) -> usize {
+        let mut total_distance = 0u16;
+        let box_count = game.box_count();
+
+        // For each box, find the closest destination
+        for i in 0..box_count {
+            let pos = game.box_pos(i);
+            let mut min_distance = u16::MAX;
+
+            // Find the minimum distance to any destination
+            for dst_idx in 0..box_count {
+                let distance = distances[dst_idx][pos.1 as usize][pos.0 as usize];
+                if distance < min_distance {
+                    min_distance = distance;
+                }
+            }
+
+            total_distance = total_distance.saturating_add(min_distance);
         }
 
-        total_distance
+        total_distance as usize
     }
 }
 
 impl Heuristic for GreedyHeuristic {
     fn compute_forward(&self, game: &Game) -> usize {
-        let box_count = game.box_count();
-        let mut boxes = [(0u8, 0u8); MAX_BOXES];
-        let mut goals = [(0u8, 0u8); MAX_BOXES];
-
-        for i in 0..box_count {
-            boxes[i] = game.box_pos(i);
-            goals[i] = game.goal_pos(i);
-        }
-
-        Self::greedy_distance(&mut boxes, &mut goals, box_count)
+        Self::greedy_distance(game, &self.goal_distances)
     }
 
     fn compute_backward(&self, game: &Game) -> usize {
-        let box_count = game.box_count();
-        let mut box_starts = [(0u8, 0u8); MAX_BOXES];
-        let mut boxes = [(0u8, 0u8); MAX_BOXES];
-
-        for i in 0..box_count {
-            box_starts[i] = game.box_start_pos(i);
-            boxes[i] = game.box_pos(i);
-        }
-
-        Self::greedy_distance(&mut box_starts, &mut boxes, box_count)
-    }
-}
-
-impl Default for GreedyHeuristic {
-    fn default() -> Self {
-        Self::new()
+        Self::greedy_distance(game, &self.start_distances)
     }
 }
 
@@ -132,7 +172,7 @@ mod tests {
                      #@*#\n\
                      ####";
         let game = Game::from_text(input).unwrap();
-        let heuristic = GreedyHeuristic::new();
+        let heuristic = GreedyHeuristic::new(&game);
 
         assert_eq!(heuristic.compute_forward(&game), 0);
     }
@@ -143,9 +183,9 @@ mod tests {
                      #@$.#\n\
                      ####";
         let game = Game::from_text(input).unwrap();
-        let heuristic = GreedyHeuristic::new();
+        let heuristic = GreedyHeuristic::new(&game);
 
-        // Box at (2,1), goal at (3,1), Manhattan distance = 1
+        // Box at (2,1), goal at (3,1), push distance = 1
         assert_eq!(heuristic.compute_forward(&game), 1);
     }
 
@@ -158,7 +198,7 @@ mod tests {
                      #  @ #\n\
                      ######";
         let game = Game::from_text(input).unwrap();
-        let heuristic = GreedyHeuristic::new();
+        let heuristic = GreedyHeuristic::new(&game);
 
         // Two boxes at (2,2) and (3,2), two goals at (2,3) and (3,3)
         // Greedy matching should pair them optimally: each box is 1 away from a goal

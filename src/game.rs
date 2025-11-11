@@ -373,14 +373,6 @@ impl Game {
         self.goals.positions[index]
     }
 
-    pub fn width(&self) -> u8 {
-        self.width
-    }
-
-    pub fn height(&self) -> u8 {
-        self.height
-    }
-
     /// Get the box index at the given position, if any.
     /// Returns Some(box_index) if there is a box at (x, y), None otherwise.
     pub fn box_at(&self, x: u8, y: u8) -> Option<u8> {

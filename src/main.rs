@@ -1,4 +1,3 @@
-mod deadlocks;
 mod game;
 mod heuristic;
 mod levels;
@@ -99,7 +98,7 @@ fn solve_level(
             game,
             print_solution_flag,
             max_nodes_explored,
-            GreedyHeuristic::new(),
+            GreedyHeuristic::new(game),
             search_type,
         ),
         HeuristicType::Null => solve_level_with_heuristic(
