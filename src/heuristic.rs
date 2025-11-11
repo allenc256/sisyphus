@@ -1,7 +1,7 @@
 use crate::game::{Game, MAX_BOXES};
 
 /// Trait for computing heuristics that estimate the number of pushes needed to solve a game.
-pub trait Heuristic {
+pub trait Heuristic: Clone {
     /// Compute estimated number of pushes needed to complete the game from the current state.
     fn compute_forward(&self, game: &Game) -> usize;
 
@@ -9,6 +9,7 @@ pub trait Heuristic {
     fn compute_backward(&self, game: &Game) -> usize;
 }
 
+#[derive(Clone)]
 pub struct NullHeuristic;
 
 impl NullHeuristic {
@@ -29,6 +30,7 @@ impl Heuristic for NullHeuristic {
 
 /// A heuristic based on greedy matching of boxes to goals using Manhattan distance.
 /// This heuristic is not admissible, so using it may produce sub-optimal solutions.
+#[derive(Clone)]
 pub struct GreedyHeuristic;
 
 impl GreedyHeuristic {

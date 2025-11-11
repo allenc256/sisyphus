@@ -8,7 +8,7 @@ use clap::{Parser, ValueEnum};
 use game::{Game, PushByPos};
 use heuristic::{GreedyHeuristic, Heuristic, NullHeuristic};
 use levels::Levels;
-use solver::{SearchDirection, Solver};
+use solver::{SearchType, SolveResult, Solver};
 use std::time::Instant;
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
@@ -21,13 +21,15 @@ enum HeuristicType {
 enum Direction {
     Forwards,
     Backwards,
+    Bidirectional,
 }
 
-impl From<Direction> for SearchDirection {
+impl From<Direction> for SearchType {
     fn from(dir: Direction) -> Self {
         match dir {
-            Direction::Forwards => SearchDirection::Forwards,
-            Direction::Backwards => SearchDirection::Backwards,
+            Direction::Forwards => SearchType::Forwards,
+            Direction::Backwards => SearchType::Backwards,
+            Direction::Bidirectional => SearchType::Bidirectional,
         }
     }
 }
@@ -53,27 +55,32 @@ fn solve_level_with_heuristic<H: Heuristic>(
     print_solution_flag: bool,
     max_nodes_explored: usize,
     heuristic: H,
-    direction: SearchDirection,
+    search_type: SearchType,
 ) {
-    let mut solver = Solver::new(max_nodes_explored, heuristic, direction);
+    let mut solver = Solver::new(max_nodes_explored, heuristic, search_type);
     let start = Instant::now();
     let result = solver.solve(game);
     let elapsed = start.elapsed();
-    let solution_len = result.as_ref().map(|v| v.len()).unwrap_or(0);
-    let solved = if solution_len > 0 { "Y" } else { "N" };
+
+    let (solved_char, solution_len) = match &result {
+        SolveResult::Solved(solution) => ('Y', solution.len()),
+        SolveResult::Cutoff => ('N', 0),
+        SolveResult::Impossible => ('I', 0),
+    };
 
     println!(
         "level: {:<3}  solved: {}  steps: {:<3}  states: {:<10}  elapsed: {} ms",
         level_num,
-        solved,
+        solved_char,
         solution_len,
         solver.nodes_explored(),
         elapsed.as_millis()
     );
 
-    if solution_len > 0 && print_solution_flag {
-        let solution = result.unwrap();
-        print_solution(game, &solution);
+    if print_solution_flag {
+        if let SolveResult::Solved(solution) = result {
+            print_solution(game, &solution);
+        }
     }
 }
 
@@ -83,7 +90,7 @@ fn solve_level(
     print_solution_flag: bool,
     max_nodes_explored: usize,
     heuristic_type: HeuristicType,
-    direction: SearchDirection,
+    search_type: SearchType,
 ) {
     match heuristic_type {
         HeuristicType::Greedy => solve_level_with_heuristic(
@@ -92,7 +99,7 @@ fn solve_level(
             print_solution_flag,
             max_nodes_explored,
             GreedyHeuristic::new(),
-            direction,
+            search_type,
         ),
         HeuristicType::Null => solve_level_with_heuristic(
             level_num,
@@ -100,7 +107,7 @@ fn solve_level(
             print_solution_flag,
             max_nodes_explored,
             NullHeuristic::new(),
-            direction,
+            search_type,
         ),
     }
 }
@@ -133,7 +140,7 @@ struct Args {
     #[arg(short = 'H', long, value_enum, default_value = "greedy")]
     heuristic: HeuristicType,
 
-    /// Search direction (forwards from initial state or backwards from goal state)
+    /// Search type (forwards, backwards, or bidirectional)
     #[arg(short = 'd', long, value_enum, default_value = "forwards")]
     direction: Direction,
 }

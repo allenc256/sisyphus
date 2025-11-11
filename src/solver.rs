@@ -2,6 +2,7 @@ use crate::game::{Game, PlayerPos, Push, PushByPos, Pushes};
 use crate::heuristic::Heuristic;
 use crate::zobrist::Zobrist;
 use std::collections::HashMap;
+use std::rc::Rc;
 
 /// Result of a search iteration
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -12,6 +13,19 @@ enum SearchResult {
     Exceeded,
     /// Node limit exceeded
     Cutoff,
+    /// Puzzle is impossible to solve
+    Impossible,
+}
+
+/// Result of solving a puzzle
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SolveResult {
+    /// Puzzle was solved
+    Solved(Vec<PushByPos>),
+    /// Node limit exceeded before solution found
+    Cutoff,
+    /// Puzzle is impossible to solve
+    Impossible,
 }
 
 /// Entry in the transposition table
@@ -26,7 +40,7 @@ struct Searcher<H: Heuristic> {
     nodes_explored: usize,
     max_nodes_explored: usize,
     table: HashMap<u64, TableEntry>, // Transposition table mapping state hash to entry
-    zobrist: Zobrist,
+    zobrist: Rc<Zobrist>,
     heuristic: H,
     direction: SearchDirection,
 }
@@ -37,18 +51,32 @@ pub enum SearchDirection {
     Backwards,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SearchType {
+    Forwards,
+    Backwards,
+    Bidirectional,
+}
+
 /// Manages iterative deepening A* by repeatedly calling Searcher with increasing thresholds
 pub struct Solver<H: Heuristic> {
-    searcher: Searcher<H>,
+    forwards: Searcher<H>,
+    backwards: Searcher<H>,
+    search_type: SearchType,
 }
 
 impl<H: Heuristic> Searcher<H> {
-    fn new(max_nodes_explored: usize, heuristic: H, direction: SearchDirection) -> Self {
+    fn new(
+        zobrist: Rc<Zobrist>,
+        max_nodes_explored: usize,
+        heuristic: H,
+        direction: SearchDirection,
+    ) -> Self {
         Searcher {
             nodes_explored: 0,
             max_nodes_explored,
             table: HashMap::new(),
-            zobrist: Zobrist::new(),
+            zobrist,
             heuristic,
             direction,
         }
@@ -228,6 +256,10 @@ impl<H: Heuristic> Searcher<H> {
             if result == SearchResult::Cutoff {
                 return SearchResult::Cutoff;
             }
+
+            if result == SearchResult::Impossible {
+                return SearchResult::Impossible;
+            }
         }
 
         SearchResult::Exceeded
@@ -270,63 +302,84 @@ impl<H: Heuristic> Searcher<H> {
 }
 
 impl<H: Heuristic> Solver<H> {
-    pub fn new(max_nodes_explored: usize, heuristic: H, direction: SearchDirection) -> Self {
+    pub fn new(max_nodes_explored: usize, heuristic: H, search_type: SearchType) -> Self {
+        let zobrist = Rc::new(Zobrist::new());
         Solver {
-            searcher: Searcher::new(max_nodes_explored, heuristic, direction),
+            forwards: Searcher::new(
+                zobrist.clone(),
+                max_nodes_explored,
+                heuristic.clone(),
+                SearchDirection::Forwards,
+            ),
+            backwards: Searcher::new(
+                zobrist,
+                max_nodes_explored,
+                heuristic,
+                SearchDirection::Backwards,
+            ),
+            search_type,
         }
     }
 
     /// Solve the game using IDA* (Iterative Deepening A*)
-    pub fn solve(&mut self, game: &Game) -> Option<Vec<PushByPos>> {
+    pub fn solve(&mut self, game: &Game) -> SolveResult {
+        match self.search_type {
+            SearchType::Forwards => self.solve_helper(SearchDirection::Forwards, game),
+            SearchType::Backwards => self.solve_helper(SearchDirection::Backwards, game),
+            SearchType::Bidirectional => todo!(),
+        }
+    }
+
+    fn solve_helper(&mut self, direction: SearchDirection, game: &Game) -> SolveResult {
         // Check if already solved
         if game.is_solved() {
-            return Some(Vec::new());
+            return SolveResult::Solved(Vec::new());
         }
+
+        let searcher = match direction {
+            SearchDirection::Forwards => &mut self.forwards,
+            SearchDirection::Backwards => &mut self.backwards,
+        };
 
         let mut initial_game = game.clone();
         let mut target_game = game.clone();
 
-        match self.searcher.direction {
+        match direction {
             SearchDirection::Forwards => target_game.set_to_goal_state(),
             SearchDirection::Backwards => initial_game.set_to_goal_state(),
         }
 
-        let target_hash = self.searcher.compute_hash(&target_game);
-        let boxes_hash = self.searcher.compute_boxes_hash(&initial_game);
+        let target_hash = searcher.compute_hash(&target_game);
+        let boxes_hash = searcher.compute_boxes_hash(&initial_game);
 
         // IDA*: try increasing f-cost thresholds
-        let mut threshold = self.searcher.compute_heuristic(game);
+        let mut threshold = searcher.compute_heuristic(game);
 
         loop {
-            self.searcher.reset();
+            searcher.reset();
             let mut search_game = initial_game.clone();
 
-            match self
-                .searcher
-                .search(&mut search_game, 0, threshold, target_hash, boxes_hash, 0)
-            {
+            match searcher.search(&mut search_game, 0, threshold, target_hash, boxes_hash, 0) {
                 SearchResult::Found => {
-                    let solution = self.searcher.reconstruct_solution(&search_game);
+                    let solution = searcher.reconstruct_solution(&search_game);
                     self.verify_solution(game, &solution);
-                    return Some(solution);
+                    return SolveResult::Solved(solution);
                 }
                 SearchResult::Exceeded => {
                     threshold += 1;
                 }
                 SearchResult::Cutoff => {
-                    return None;
+                    return SolveResult::Cutoff;
                 }
-            }
-
-            // If we've exceeded max nodes, give up
-            if self.searcher.nodes_explored > self.searcher.max_nodes_explored {
-                return None;
+                SearchResult::Impossible => {
+                    return SolveResult::Impossible;
+                }
             }
         }
     }
 
     pub fn nodes_explored(&self) -> usize {
-        self.searcher.nodes_explored()
+        self.forwards.nodes_explored() + self.backwards.nodes_explored()
     }
 
     fn verify_solution(&self, game: &Game, solution: &[PushByPos]) {
@@ -379,7 +432,7 @@ impl Default for Solver<crate::heuristic::GreedyHeuristic> {
         Self::new(
             5000000,
             crate::heuristic::GreedyHeuristic::new(),
-            SearchDirection::Forwards,
+            SearchType::Forwards,
         )
     }
 }
@@ -396,19 +449,20 @@ mod tests {
         let game = Game::from_text(input).unwrap();
 
         let heuristic = crate::heuristic::GreedyHeuristic::new();
-        let mut solver = Solver::new(5000000, heuristic, SearchDirection::Forwards);
-        let solution = solver.solve(&game);
+        let mut solver = Solver::new(5000000, heuristic, SearchType::Forwards);
+        let result = solver.solve(&game);
 
-        assert!(solution.is_some());
-        let moves = solution.unwrap();
-        assert_eq!(moves.len(), 1);
+        assert!(matches!(result, SolveResult::Solved(_)));
+        if let SolveResult::Solved(moves) = result {
+            assert_eq!(moves.len(), 1);
 
-        // Verify solution works
-        let mut test_game = Game::from_text(input).unwrap();
-        for push in moves {
-            test_game.push_by_pos(push);
+            // Verify solution works
+            let mut test_game = Game::from_text(input).unwrap();
+            for push in moves {
+                test_game.push_by_pos(push);
+            }
+            assert!(test_game.is_solved());
         }
-        assert!(test_game.is_solved());
     }
 
     #[test]
@@ -419,11 +473,13 @@ mod tests {
         let game = Game::from_text(input).unwrap();
 
         let heuristic = crate::heuristic::GreedyHeuristic::new();
-        let mut solver = Solver::new(5000000, heuristic, SearchDirection::Forwards);
-        let solution = solver.solve(&game);
+        let mut solver = Solver::new(5000000, heuristic, SearchType::Forwards);
+        let result = solver.solve(&game);
 
-        assert!(solution.is_some());
-        assert_eq!(solution.unwrap().len(), 0);
+        assert!(matches!(result, SolveResult::Solved(_)));
+        if let SolveResult::Solved(moves) = result {
+            assert_eq!(moves.len(), 0);
+        }
     }
 
     #[test]
@@ -434,18 +490,19 @@ mod tests {
         let game = Game::from_text(input).unwrap();
 
         let heuristic = crate::heuristic::GreedyHeuristic::new();
-        let mut solver = Solver::new(5000000, heuristic, SearchDirection::Forwards);
-        let solution = solver.solve(&game);
+        let mut solver = Solver::new(5000000, heuristic, SearchType::Forwards);
+        let result = solver.solve(&game);
 
-        assert!(solution.is_some());
-        let moves = solution.unwrap();
-        assert_eq!(moves.len(), 2);
+        assert!(matches!(result, SolveResult::Solved(_)));
+        if let SolveResult::Solved(moves) = result {
+            assert_eq!(moves.len(), 2);
 
-        // Verify solution works
-        let mut test_game = Game::from_text(input).unwrap();
-        for push in moves {
-            test_game.push_by_pos(push);
+            // Verify solution works
+            let mut test_game = Game::from_text(input).unwrap();
+            for push in moves {
+                test_game.push_by_pos(push);
+            }
+            assert!(test_game.is_solved());
         }
-        assert!(test_game.is_solved());
     }
 }
