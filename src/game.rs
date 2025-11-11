@@ -456,7 +456,7 @@ impl Game {
         let (x, y) = push.box_pos;
         let box_index = self
             .box_at(x, y)
-            .expect(&format!("No box at position ({}, {})", x, y));
+            .unwrap_or_else(|| panic!("No box at position ({}, {})", x, y));
 
         self.push(Push {
             box_index,

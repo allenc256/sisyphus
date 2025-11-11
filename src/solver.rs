@@ -335,12 +335,14 @@ impl<H: Heuristic> Solver<H> {
             // Get box index at this position
             let box_index = test_game
                 .box_at(push.box_pos.0, push.box_pos.1)
-                .expect(&format!(
-                    "Solution verification failed: no box at position ({}, {}) for push {}",
-                    push.box_pos.0,
-                    push.box_pos.1,
-                    i + 1
-                ));
+                .unwrap_or_else(|| {
+                    panic!(
+                        "Solution verification failed: no box at position ({}, {}) for push {}",
+                        push.box_pos.0,
+                        push.box_pos.1,
+                        i + 1
+                    )
+                });
 
             // Compute valid pushes at this state
             let (valid_pushes, _canonical_pos) = test_game.compute_pushes();
