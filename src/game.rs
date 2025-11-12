@@ -373,7 +373,7 @@ impl Game {
 
     /// Move from position (x, y) in the given direction.
     /// Returns Some((new_x, new_y)) if the new position is within bounds, None otherwise.
-    pub fn move_pos(&self, x: u8, y: u8, dir: Direction) -> Option<(u8, u8)> {
+    pub fn push_pos(&self, x: u8, y: u8, dir: Direction) -> Option<(u8, u8)> {
         let (dx, dy) = dir.delta();
         let new_x = x as i32 + dx as i32;
         let new_y = y as i32 + dy as i32;
@@ -387,7 +387,7 @@ impl Game {
 
     /// Move from position (x, y) in the opposite direction of dir.
     /// Returns Some((new_x, new_y)) if the new position is within bounds, None otherwise.
-    pub fn unmove_pos(&self, x: u8, y: u8, dir: Direction) -> Option<(u8, u8)> {
+    pub fn pull_pos(&self, x: u8, y: u8, dir: Direction) -> Option<(u8, u8)> {
         let (dx, dy) = dir.delta();
         let new_x = x as i32 - dx as i32;
         let new_y = y as i32 - dy as i32;
@@ -411,7 +411,7 @@ impl Game {
 
         let (x, y) = self.boxes.positions[push.box_index as usize];
         let (new_x, new_y) = self
-            .move_pos(x, y, push.direction)
+            .push_pos(x, y, push.direction)
             .expect("Push destination out of bounds");
 
         let dest_tile = self.get_tile(new_x, new_y);
@@ -465,12 +465,12 @@ impl Game {
 
         // Calculate where box came from (opposite direction)
         let (old_x, old_y) = self
-            .unmove_pos(new_x, new_y, pull.direction)
+            .pull_pos(new_x, new_y, pull.direction)
             .expect("Pull source out of bounds");
 
         // Calculate where player was before the push
         let (player_old_x, player_old_y) = self
-            .unmove_pos(old_x, old_y, pull.direction)
+            .pull_pos(old_x, old_y, pull.direction)
             .expect("Pull player position out of bounds");
 
         let current_tile = self.get_tile(new_x, new_y);
@@ -563,7 +563,7 @@ impl Game {
         let canonical_pos = self.player_dfs((x, y), &mut reachable, |_player_pos, dir, box_idx| {
             // For pushes: check if the box can move forward in the direction
             let box_pos = self.box_pos(box_idx as usize);
-            if let Some((dest_x, dest_y)) = self.move_pos(box_pos.0, box_pos.1, dir) {
+            if let Some((dest_x, dest_y)) = self.push_pos(box_pos.0, box_pos.1, dir) {
                 let dest_tile = self.get_tile(dest_x, dest_y);
                 if !self.boxes.has_box_at(dest_x, dest_y)
                     && (dest_tile == Tile::Floor || dest_tile == Tile::Goal)
@@ -621,7 +621,7 @@ impl Game {
             // For pull: box at (nx, ny), player at (x, y)
             // Box moves to (x, y), player moves to (x, y) - dir
             // Check if player destination is free
-            if let Some((dest_x, dest_y)) = self.unmove_pos(x, y, dir) {
+            if let Some((dest_x, dest_y)) = self.pull_pos(x, y, dir) {
                 let dest_tile = self.get_tile(dest_x, dest_y);
                 if !self.boxes.has_box_at(dest_x, dest_y)
                     && (dest_tile == Tile::Floor || dest_tile == Tile::Goal)
@@ -656,7 +656,7 @@ impl Game {
         while let Some((x, y)) = stack.pop() {
             // Check all 4 directions
             for &dir in &ALL_DIRECTIONS {
-                if let Some((nx, ny)) = self.move_pos(x, y, dir) {
+                if let Some((nx, ny)) = self.push_pos(x, y, dir) {
                     // If there's a box, notify the closure
                     if let Some(box_idx) = self.box_at(nx, ny) {
                         on_box((x, y), dir, box_idx);

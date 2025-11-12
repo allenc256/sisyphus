@@ -79,9 +79,9 @@ impl GreedyHeuristic {
             let dist = distances[box_y as usize][box_x as usize];
 
             for direction in ALL_DIRECTIONS {
-                if let Some((new_box_x, new_box_y)) = game.unmove_pos(box_x, box_y, direction) {
+                if let Some((new_box_x, new_box_y)) = game.pull_pos(box_x, box_y, direction) {
                     if let Some((player_x, player_y)) =
-                        game.unmove_pos(new_box_x, new_box_y, direction)
+                        game.pull_pos(new_box_x, new_box_y, direction)
                     {
                         let new_box_tile = game.get_tile(new_box_x, new_box_y);
                         let player_tile = game.get_tile(player_x, player_y);
@@ -110,8 +110,8 @@ impl GreedyHeuristic {
             let dist = distances[box_y as usize][box_x as usize];
 
             for direction in ALL_DIRECTIONS {
-                if let Some((new_box_x, new_box_y)) = game.move_pos(box_x, box_y, direction) {
-                    if let Some((player_x, player_y)) = game.unmove_pos(box_x, box_y, direction) {
+                if let Some((new_box_x, new_box_y)) = game.push_pos(box_x, box_y, direction) {
+                    if let Some((player_x, player_y)) = game.pull_pos(box_x, box_y, direction) {
                         let new_box_tile = game.get_tile(new_box_x, new_box_y);
                         let player_tile = game.get_tile(player_x, player_y);
 
