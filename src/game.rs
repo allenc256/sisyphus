@@ -86,82 +86,73 @@ pub struct MoveByPos {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Moves {
-    // Bitset: bits[0] = Up for all boxes, bits[1] = Down, bits[2] = Left, bits[3] = Right
-    // Each u32 holds 32 bits for 32 boxes
-    bits: [u32; 4],
+    // Bitset using u128: bits 0-31 = Up, 32-63 = Down, 64-95 = Left, 96-127 = Right
+    // Each 32-bit chunk holds one direction for all boxes (box indices 0-31)
+    bits: u128,
 }
 
 impl Moves {
     fn new() -> Self {
-        Moves { bits: [0; 4] }
+        Moves { bits: 0 }
     }
 
     fn add(&mut self, box_index: u8, direction: Direction) {
-        let dir_idx = direction.index();
-        self.bits[dir_idx] |= 1u32 << box_index;
+        let bit_pos = direction.index() * 32 + box_index as usize;
+        self.bits |= 1u128 << bit_pos;
     }
 
     pub fn len(&self) -> usize {
-        self.bits
-            .iter()
-            .map(|&word| word.count_ones() as usize)
-            .sum()
+        self.bits.count_ones() as usize
     }
 
     pub fn is_empty(&self) -> bool {
-        self.bits.iter().all(|&word| word == 0)
+        self.bits == 0
     }
 
     pub fn contains(&self, push: Move) -> bool {
-        let dir_idx = push.direction.index();
-        (self.bits[dir_idx] & (1u32 << push.box_index)) != 0
+        let bit_pos = push.direction.index() * 32 + push.box_index as usize;
+        (self.bits & (1u128 << bit_pos)) != 0
     }
 
     pub fn iter(&self) -> MovesIter {
         MovesIter {
-            moves: self,
-            dir_idx: 0,
-            box_bits: self.bits[0],
+            bits: self.bits,
         }
     }
 }
 
-pub struct MovesIter<'a> {
-    moves: &'a Moves,
-    dir_idx: usize,
-    box_bits: u32,
+pub struct MovesIter {
+    bits: u128,
 }
 
-impl Iterator for MovesIter<'_> {
+impl Iterator for MovesIter {
     type Item = Move;
 
     fn next(&mut self) -> Option<Self::Item> {
-        loop {
-            // Find next set bit in current direction
-            if self.box_bits != 0 {
-                let box_index = self.box_bits.trailing_zeros() as u8;
-                self.box_bits &= self.box_bits - 1; // Clear lowest set bit
-
-                let direction = Direction::from_index(self.dir_idx);
-                return Some(Move {
-                    box_index,
-                    direction,
-                });
-            }
-
-            // Move to next direction
-            self.dir_idx += 1;
-            if self.dir_idx >= 4 {
-                return None;
-            }
-            self.box_bits = self.moves.bits[self.dir_idx];
+        if self.bits == 0 {
+            return None;
         }
+
+        // Find the lowest set bit
+        let bit_pos = self.bits.trailing_zeros() as usize;
+
+        // Clear the lowest set bit
+        self.bits &= self.bits - 1;
+
+        // Decode bit position to (box_index, direction)
+        let direction = Direction::from_index(bit_pos / 32);
+        let box_index = (bit_pos % 32) as u8;
+
+        Some(Move {
+            box_index,
+            direction,
+        })
     }
 }
 
 impl<'a> IntoIterator for &'a Moves {
     type Item = Move;
-    type IntoIter = MovesIter<'a>;
+    type IntoIter = MovesIter;
 
     fn into_iter(self) -> Self::IntoIter {
         self.iter()
