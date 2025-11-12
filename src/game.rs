@@ -1,3 +1,4 @@
+use arrayvec::ArrayVec;
 use std::fmt;
 
 pub const MAX_SIZE: usize = 64;
@@ -646,19 +647,14 @@ impl Game {
     {
         let mut canonical_pos = start_player;
 
-        // Stack-allocated stack for DFS
-        let mut stack: [(u8, u8); MAX_SIZE * MAX_SIZE] = [(0, 0); MAX_SIZE * MAX_SIZE];
-        let mut stack_size = 0;
+        // Stack-allocated stack for DFS using ArrayVec
+        let mut stack: ArrayVec<(u8, u8), { MAX_SIZE * MAX_SIZE }> = ArrayVec::new();
 
         // DFS from player position to find all reachable positions
-        stack[stack_size] = start_player;
-        stack_size += 1;
+        stack.push(start_player);
         reachable[start_player.1 as usize][start_player.0 as usize] = true;
 
-        while stack_size > 0 {
-            stack_size -= 1;
-            let (x, y) = stack[stack_size];
-
+        while let Some((x, y)) = stack.pop() {
             // Check all 4 directions
             for &dir in &ALL_DIRECTIONS {
                 if let Some((nx, ny)) = self.move_pos(x, y, dir) {
@@ -678,8 +674,7 @@ impl Game {
                                 canonical_pos = (nx, ny);
                             }
 
-                            stack[stack_size] = (nx, ny);
-                            stack_size += 1;
+                            stack.push((nx, ny));
                         }
                     }
                 }
