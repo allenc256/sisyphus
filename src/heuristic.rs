@@ -145,7 +145,11 @@ impl GreedyHeuristic {
                 }
             }
 
-            total_distance = total_distance.saturating_add(min_distance);
+            if min_distance == u16::MAX {
+                return u16::MAX as usize;
+            }
+
+            total_distance += min_distance;
         }
 
         total_distance as usize

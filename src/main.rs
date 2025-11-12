@@ -1,3 +1,4 @@
+mod bitboard;
 mod game;
 mod heuristic;
 mod levels;

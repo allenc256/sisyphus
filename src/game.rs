@@ -1,3 +1,4 @@
+use crate::bitboard::LazyBitboard;
 use arrayvec::ArrayVec;
 use std::fmt;
 
@@ -116,9 +117,7 @@ impl Moves {
     }
 
     pub fn iter(&self) -> MovesIter {
-        MovesIter {
-            bits: self.bits,
-        }
+        MovesIter { bits: self.bits }
     }
 }
 
@@ -536,7 +535,7 @@ impl Game {
 
         match self.player {
             PlayerPos::Known(x, y) => {
-                let mut reachable = [[false; MAX_SIZE]; MAX_SIZE];
+                let mut reachable = LazyBitboard::new();
                 let (cx, cy) = self.player_dfs((x, y), &mut reachable, |_pos, _dir, _box_idx| {});
                 PlayerPos::Known(cx, cy)
             }
@@ -560,7 +559,7 @@ impl Game {
         };
 
         let mut pushes = Moves::new();
-        let mut reachable = [[false; MAX_SIZE]; MAX_SIZE];
+        let mut reachable = LazyBitboard::new();
         let canonical_pos = self.player_dfs((x, y), &mut reachable, |_player_pos, dir, box_idx| {
             // For pushes: check if the box can move forward in the direction
             let box_pos = self.box_pos(box_idx as usize);
@@ -582,7 +581,7 @@ impl Game {
     /// and returns Unknown as the canonical position.
     pub fn compute_pulls(&self) -> (Moves, PlayerPos) {
         let mut pulls = Moves::new();
-        let mut reachable = [[false; MAX_SIZE]; MAX_SIZE];
+        let mut reachable = LazyBitboard::new();
 
         match self.player {
             PlayerPos::Known(x, y) => {
@@ -595,7 +594,7 @@ impl Game {
                 for y in 0..self.height {
                     for x in 0..self.width {
                         // Skip if already explored from a previous position
-                        if reachable[y as usize][x as usize] {
+                        if reachable.get(x, y) {
                             continue;
                         }
 
@@ -615,7 +614,7 @@ impl Game {
     fn compute_pulls_helper(
         &self,
         player: (u8, u8),
-        reachable: &mut [[bool; MAX_SIZE]; MAX_SIZE],
+        reachable: &mut LazyBitboard,
         pulls: &mut Moves,
     ) -> (u8, u8) {
         self.player_dfs(player, reachable, |(x, y), dir, box_idx| {
@@ -639,7 +638,7 @@ impl Game {
     fn player_dfs<F>(
         &self,
         start_player: (u8, u8),
-        reachable: &mut [[bool; MAX_SIZE]; MAX_SIZE],
+        reachable: &mut LazyBitboard,
         mut on_box: F,
     ) -> (u8, u8)
     where
@@ -652,7 +651,7 @@ impl Game {
 
         // DFS from player position to find all reachable positions
         stack.push(start_player);
-        reachable[start_player.1 as usize][start_player.0 as usize] = true;
+        reachable.set(start_player.0, start_player.1);
 
         while let Some((x, y)) = stack.pop() {
             // Check all 4 directions
@@ -663,11 +662,9 @@ impl Game {
                         on_box((x, y), dir, box_idx);
                     } else {
                         let tile = self.get_tile(nx, ny);
-                        if (tile == Tile::Floor || tile == Tile::Goal)
-                            && !reachable[ny as usize][nx as usize]
-                        {
+                        if (tile == Tile::Floor || tile == Tile::Goal) && !reachable.get(nx, ny) {
                             // Continue DFS to this floor/goal tile
-                            reachable[ny as usize][nx as usize] = true;
+                            reachable.set(nx, ny);
 
                             // Update canonical position if this is lexicographically smaller
                             if (nx, ny) < canonical_pos {
