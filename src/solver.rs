@@ -1,5 +1,5 @@
 use crate::game::{Game, Move, MoveByPos, Moves, PlayerPos};
-use crate::heuristic::Heuristic;
+use crate::heuristic::{Cost, Heuristic};
 use crate::zobrist::Zobrist;
 use std::collections::HashMap;
 use std::rc::Rc;
@@ -153,8 +153,11 @@ impl<H: Heuristic> Searcher<H> {
         }
 
         // Compute heuristic and f-cost
-        let h_cost = self.compute_heuristic(game);
-        let f_cost = g_cost + h_cost;
+        let mut f_cost = g_cost;
+        match self.compute_heuristic(game) {
+            Cost::Solvable(h_cost) => f_cost += h_cost as usize,
+            Cost::Impossible => return SearchResult::Impossible,
+        }
 
         // If f-cost exceeds threshold, stop searching this branch
         if f_cost > threshold {
@@ -189,6 +192,8 @@ impl<H: Heuristic> Searcher<H> {
             return SearchResult::Solved(Box::new(game.clone()));
         }
 
+        let mut result = SearchResult::Impossible;
+
         // Try each push
         for move_ in &moves {
             let old_box_pos = game.box_pos(move_.box_index as usize);
@@ -200,7 +205,7 @@ impl<H: Heuristic> Searcher<H> {
                 ^ self.zobrist.box_hash(old_box_pos.0, old_box_pos.1)
                 ^ self.zobrist.box_hash(new_box_pos.0, new_box_pos.1);
 
-            let result = self.search_helper(
+            let child_result = self.search_helper(
                 game,
                 g_cost + 1,
                 threshold,
@@ -208,22 +213,21 @@ impl<H: Heuristic> Searcher<H> {
                 new_boxes_hash,
                 curr_hash,
             );
-            if let SearchResult::Solved(_) = result {
-                return result;
+            if let SearchResult::Solved(_) = child_result {
+                return child_result;
             }
 
             self.unapply_move(game, move_);
 
-            if result == SearchResult::Cutoff {
-                return SearchResult::Cutoff;
+            if child_result == SearchResult::Cutoff {
+                return child_result;
             }
-
-            if result == SearchResult::Impossible {
-                return SearchResult::Impossible;
+            if child_result == SearchResult::Exceeded {
+                result = SearchResult::Exceeded;
             }
         }
 
-        SearchResult::Exceeded
+        result
     }
 
     fn reconstruct_solution(&self, final_game: &Game) -> Vec<MoveByPos> {
@@ -286,7 +290,7 @@ impl<H: Heuristic> Searcher<H> {
         solution
     }
 
-    fn compute_heuristic(&self, game: &Game) -> usize {
+    fn compute_heuristic(&self, game: &Game) -> Cost {
         match self.direction {
             SearchDirection::Forwards => self.heuristic.compute_forward(game),
             SearchDirection::Backwards => self.heuristic.compute_backward(game),
@@ -520,5 +524,18 @@ mod tests {
             }
             assert!(test_game.is_solved());
         }
+    }
+
+    #[test]
+    fn test_solve_impossible() {
+        let input = "#####\n\
+                     #@$#.#\n\
+                     #####";
+        let game = Game::from_text(input).unwrap();
+
+        let heuristic = crate::heuristic::GreedyHeuristic::new(&game);
+        let mut solver = Solver::new(5000000, heuristic, SearchType::Forwards, &game);
+        let result = solver.solve();
+        assert_eq!(result, SolveResult::Impossible);
     }
 }

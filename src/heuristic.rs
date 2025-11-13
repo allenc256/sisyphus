@@ -1,13 +1,19 @@
 use crate::game::{ALL_DIRECTIONS, Game, MAX_BOXES, MAX_SIZE, Tile};
 use std::collections::VecDeque;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Cost {
+    Solvable(u16),
+    Impossible,
+}
+
 /// Trait for computing heuristics that estimate the number of pushes needed to solve a game.
 pub trait Heuristic {
     /// Compute estimated number of pushes needed to complete the game from the current state.
-    fn compute_forward(&self, game: &Game) -> usize;
+    fn compute_forward(&self, game: &Game) -> Cost;
 
     /// Compute estimated number of pushes needed to get to the current state from the initial state.
-    fn compute_backward(&self, game: &Game) -> usize;
+    fn compute_backward(&self, game: &Game) -> Cost;
 }
 
 pub struct NullHeuristic;
@@ -19,12 +25,12 @@ impl NullHeuristic {
 }
 
 impl Heuristic for NullHeuristic {
-    fn compute_forward(&self, _game: &Game) -> usize {
-        0
+    fn compute_forward(&self, _game: &Game) -> Cost {
+        Cost::Solvable(0)
     }
 
-    fn compute_backward(&self, _game: &Game) -> usize {
-        0
+    fn compute_backward(&self, _game: &Game) -> Cost {
+        Cost::Solvable(0)
     }
 }
 
@@ -128,7 +134,7 @@ impl GreedyHeuristic {
         }
     }
 
-    fn greedy_distance(game: &Game, distances: &[[[u16; MAX_SIZE]; MAX_SIZE]; MAX_BOXES]) -> usize {
+    fn greedy_distance(game: &Game, distances: &[[[u16; MAX_SIZE]; MAX_SIZE]; MAX_BOXES]) -> Cost {
         let mut total_distance = 0u16;
         let box_count = game.box_count();
 
@@ -146,22 +152,22 @@ impl GreedyHeuristic {
             }
 
             if min_distance == u16::MAX {
-                return u16::MAX as usize;
+                return Cost::Impossible;
             }
 
             total_distance += min_distance;
         }
 
-        total_distance as usize
+        Cost::Solvable(total_distance)
     }
 }
 
 impl Heuristic for GreedyHeuristic {
-    fn compute_forward(&self, game: &Game) -> usize {
+    fn compute_forward(&self, game: &Game) -> Cost {
         Self::greedy_distance(game, &self.goal_distances)
     }
 
-    fn compute_backward(&self, game: &Game) -> usize {
+    fn compute_backward(&self, game: &Game) -> Cost {
         Self::greedy_distance(game, &self.start_distances)
     }
 }
@@ -178,7 +184,7 @@ mod tests {
         let game = Game::from_text(input).unwrap();
         let heuristic = GreedyHeuristic::new(&game);
 
-        assert_eq!(heuristic.compute_forward(&game), 0);
+        assert_eq!(heuristic.compute_forward(&game), Cost::Solvable(0));
     }
 
     #[test]
@@ -190,7 +196,7 @@ mod tests {
         let heuristic = GreedyHeuristic::new(&game);
 
         // Box at (2,1), goal at (3,1), push distance = 1
-        assert_eq!(heuristic.compute_forward(&game), 1);
+        assert_eq!(heuristic.compute_forward(&game), Cost::Solvable(1));
     }
 
     #[test]
@@ -206,6 +212,6 @@ mod tests {
 
         // Two boxes at (2,2) and (3,2), two goals at (2,3) and (3,3)
         // Greedy matching should pair them optimally: each box is 1 away from a goal
-        assert_eq!(heuristic.compute_forward(&game), 2);
+        assert_eq!(heuristic.compute_forward(&game), Cost::Solvable(2));
     }
 }
