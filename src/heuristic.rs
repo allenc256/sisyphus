@@ -37,15 +37,15 @@ impl Heuristic for NullHeuristic {
 /// A heuristic based on greedy matching of boxes to goals using precomputed push distances.
 pub struct GreedyHeuristic {
     /// goal_distances[goal_idx][y][x] = minimum pushes to get a box from (x, y) to goal goal_idx
-    goal_distances: [[[u16; MAX_SIZE]; MAX_SIZE]; MAX_BOXES],
+    goal_distances: Box<[[[u16; MAX_SIZE]; MAX_SIZE]; MAX_BOXES]>,
     /// start_distances[box_idx][y][x] = minimum pulls to get a box from (x, y) to start position box_idx
-    start_distances: [[[u16; MAX_SIZE]; MAX_SIZE]; MAX_BOXES],
+    start_distances: Box<[[[u16; MAX_SIZE]; MAX_SIZE]; MAX_BOXES]>,
 }
 
 impl GreedyHeuristic {
     pub fn new(game: &Game) -> Self {
-        let goal_distances = Self::compute_distances_from_goals(game);
-        let start_distances = Self::compute_distances_from_starts(game);
+        let goal_distances = Box::new(Self::compute_distances_from_goals(game));
+        let start_distances = Box::new(Self::compute_distances_from_starts(game));
         GreedyHeuristic {
             goal_distances,
             start_distances,

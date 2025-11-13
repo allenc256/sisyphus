@@ -3,7 +3,7 @@ use arrayvec::ArrayVec;
 use std::fmt;
 
 pub const MAX_SIZE: usize = 64;
-pub const MAX_BOXES: usize = 32;
+pub const MAX_BOXES: usize = 64;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Tile {
@@ -88,65 +88,78 @@ pub struct MoveByPos {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Moves {
-    // Bitset using u128: bits 0-31 = Up, 32-63 = Down, 64-95 = Left, 96-127 = Right
-    // Each 32-bit chunk holds one direction for all boxes (box indices 0-31)
-    bits: u128,
+    // Bitset: bits[0] = Up, bits[1] = Down, bits[2] = Left, bits[3] = Right
+    // Each u64 holds 64 bits for 64 boxes (box indices 0-63)
+    bits: [u64; 4],
 }
 
 impl Moves {
     fn new() -> Self {
-        Moves { bits: 0 }
+        Moves { bits: [0; 4] }
     }
 
     fn add(&mut self, box_index: u8, direction: Direction) {
-        let bit_pos = direction.index() * 32 + box_index as usize;
-        self.bits |= 1u128 << bit_pos;
+        let dir_idx = direction.index();
+        self.bits[dir_idx] |= 1u64 << box_index;
     }
 
     pub fn len(&self) -> usize {
-        self.bits.count_ones() as usize
+        self.bits
+            .iter()
+            .map(|&word| word.count_ones() as usize)
+            .sum()
     }
 
     pub fn is_empty(&self) -> bool {
-        self.bits == 0
+        self.bits.iter().all(|&word| word == 0)
     }
 
     pub fn contains(&self, push: Move) -> bool {
-        let bit_pos = push.direction.index() * 32 + push.box_index as usize;
-        (self.bits & (1u128 << bit_pos)) != 0
+        let dir_idx = push.direction.index();
+        (self.bits[dir_idx] & (1u64 << push.box_index)) != 0
     }
 
     pub fn iter(&self) -> MovesIter {
-        MovesIter { bits: self.bits }
+        MovesIter {
+            bits: self.bits,
+            dir_idx: 0,
+            current_bits: self.bits[0],
+        }
     }
 }
 
 pub struct MovesIter {
-    bits: u128,
+    bits: [u64; 4],
+    dir_idx: usize,
+    current_bits: u64,
 }
 
 impl Iterator for MovesIter {
     type Item = Move;
 
     fn next(&mut self) -> Option<Self::Item> {
-        if self.bits == 0 {
-            return None;
+        loop {
+            if self.current_bits != 0 {
+                // Find the lowest set bit
+                let box_index = self.current_bits.trailing_zeros() as u8;
+
+                // Clear the lowest set bit
+                self.current_bits &= self.current_bits - 1;
+
+                let direction = Direction::from_index(self.dir_idx);
+                return Some(Move {
+                    box_index,
+                    direction,
+                });
+            }
+
+            // Move to next direction
+            self.dir_idx += 1;
+            if self.dir_idx >= 4 {
+                return None;
+            }
+            self.current_bits = self.bits[self.dir_idx];
         }
-
-        // Find the lowest set bit
-        let bit_pos = self.bits.trailing_zeros() as usize;
-
-        // Clear the lowest set bit
-        self.bits &= self.bits - 1;
-
-        // Decode bit position to (box_index, direction)
-        let direction = Direction::from_index(bit_pos / 32);
-        let box_index = (bit_pos % 32) as u8;
-
-        Some(Move {
-            box_index,
-            direction,
-        })
     }
 }
 
