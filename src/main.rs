@@ -1,4 +1,5 @@
 mod bitboard;
+mod deadlocks;
 mod game;
 mod heuristic;
 mod levels;
@@ -57,16 +58,24 @@ fn solve_level_with_heuristic<H: Heuristic>(
     max_nodes_explored: usize,
     heuristic: H,
     search_type: SearchType,
+    freeze_deadlocks: bool,
 ) {
-    let mut solver = Solver::new(max_nodes_explored, heuristic, search_type, game);
+    let mut solver = Solver::new(
+        max_nodes_explored,
+        heuristic,
+        search_type,
+        game,
+        freeze_deadlocks,
+    );
     let start = Instant::now();
     let result = solver.solve();
     let elapsed = start.elapsed();
+    let (nodes_forwards, nodes_backwards) = solver.nodes_explored();
 
     let (solved_char, solution_len) = match &result {
         SolveResult::Solved(solution) => ('Y', solution.len()),
         SolveResult::Cutoff => ('N', 0),
-        SolveResult::Impossible => ('I', 0),
+        SolveResult::Impossible => ('X', 0),
     };
 
     println!(
@@ -74,7 +83,7 @@ fn solve_level_with_heuristic<H: Heuristic>(
         level_num,
         solved_char,
         solution_len,
-        solver.nodes_explored(),
+        nodes_forwards + nodes_backwards,
         elapsed.as_millis()
     );
 
@@ -92,6 +101,7 @@ fn solve_level(
     max_nodes_explored: usize,
     heuristic_type: HeuristicType,
     search_type: SearchType,
+    freeze_deadlocks: bool,
 ) {
     match heuristic_type {
         HeuristicType::Greedy => solve_level_with_heuristic(
@@ -101,6 +111,7 @@ fn solve_level(
             max_nodes_explored,
             GreedyHeuristic::new(game),
             search_type,
+            freeze_deadlocks,
         ),
         HeuristicType::Null => solve_level_with_heuristic(
             level_num,
@@ -109,6 +120,7 @@ fn solve_level(
             max_nodes_explored,
             NullHeuristic::new(),
             search_type,
+            freeze_deadlocks,
         ),
     }
 }
@@ -144,6 +156,10 @@ struct Args {
     /// Search type
     #[arg(short = 'd', long, value_enum, default_value = "bidirectional")]
     direction: Direction,
+
+    /// Disable freeze deadlock detection
+    #[arg(long, default_value = "false")]
+    no_freeze_deadlocks: bool,
 }
 
 fn main() {
@@ -191,6 +207,7 @@ fn main() {
             args.max_nodes_explored,
             args.heuristic,
             args.direction.into(),
+            !args.no_freeze_deadlocks,
         );
     }
 }

@@ -1,3 +1,4 @@
+use crate::deadlocks::Deadlocks;
 use crate::game::{Game, Move, MoveByPos, Moves, PlayerPos};
 use crate::heuristic::{Cost, Heuristic};
 use crate::zobrist::Zobrist;
@@ -46,6 +47,7 @@ struct Searcher<H: Heuristic> {
     initial_game: Rc<Game>,
     initial_hash: u64,
     initial_boxes_hash: u64,
+    freeze_deadlocks: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -75,9 +77,12 @@ impl<H: Heuristic> Searcher<H> {
         heuristic: Rc<H>,
         direction: SearchDirection,
         initial_game: Rc<Game>,
+        freeze_deadlocks: bool,
     ) -> Self {
         let initial_hash = zobrist.compute_hash(&initial_game);
         let initial_boxes_hash = zobrist.compute_boxes_hash(&initial_game);
+        // Only check freeze deadlocks for forward search
+        let freeze_deadlocks = freeze_deadlocks && direction == SearchDirection::Forwards;
         let mut searcher = Searcher {
             nodes_explored: 0,
             max_nodes_explored,
@@ -88,6 +93,7 @@ impl<H: Heuristic> Searcher<H> {
             initial_game,
             initial_hash,
             initial_boxes_hash,
+            freeze_deadlocks,
         };
         searcher.reset();
         searcher
@@ -199,6 +205,13 @@ impl<H: Heuristic> Searcher<H> {
             let old_box_pos = game.box_pos(move_.box_index as usize);
             self.apply_move(game, move_);
             let new_box_pos = game.box_pos(move_.box_index as usize);
+
+            if self.freeze_deadlocks
+                && Deadlocks::is_freeze_deadlock(game, new_box_pos.0, new_box_pos.1)
+            {
+                self.unapply_move(game, move_);
+                continue;
+            }
 
             // Update boxes hash (unhash old position, hash new position)
             let new_boxes_hash = boxes_hash
@@ -332,6 +345,7 @@ impl<H: Heuristic> Solver<H> {
         heuristic: H,
         search_type: SearchType,
         game: &Game,
+        freeze_deadlocks: bool,
     ) -> Self {
         let zobrist = Rc::new(Zobrist::new());
         let heuristic = Rc::new(heuristic);
@@ -345,6 +359,7 @@ impl<H: Heuristic> Solver<H> {
                 heuristic.clone(),
                 SearchDirection::Forwards,
                 forwards_game,
+                freeze_deadlocks,
             ),
             backwards: Searcher::new(
                 zobrist,
@@ -352,6 +367,7 @@ impl<H: Heuristic> Solver<H> {
                 heuristic,
                 SearchDirection::Backwards,
                 backwards_game,
+                freeze_deadlocks,
             ),
             search_type,
         }
@@ -407,8 +423,11 @@ impl<H: Heuristic> Solver<H> {
         }
     }
 
-    pub fn nodes_explored(&self) -> usize {
-        self.forwards.nodes_explored() + self.backwards.nodes_explored()
+    pub fn nodes_explored(&self) -> (usize, usize) {
+        (
+            self.forwards.nodes_explored(),
+            self.backwards.nodes_explored(),
+        )
     }
 
     fn verify_solution(&self, solution: &[MoveByPos]) {
@@ -469,7 +488,7 @@ mod tests {
         let game = Game::from_text(input).unwrap();
 
         let heuristic = crate::heuristic::GreedyHeuristic::new(&game);
-        let mut solver = Solver::new(5000000, heuristic, SearchType::Forwards, &game);
+        let mut solver = Solver::new(5000000, heuristic, SearchType::Forwards, &game, true);
         let result = solver.solve();
 
         assert!(matches!(result, SolveResult::Solved(_)));
@@ -493,7 +512,7 @@ mod tests {
         let game = Game::from_text(input).unwrap();
 
         let heuristic = crate::heuristic::GreedyHeuristic::new(&game);
-        let mut solver = Solver::new(5000000, heuristic, SearchType::Forwards, &game);
+        let mut solver = Solver::new(5000000, heuristic, SearchType::Forwards, &game, true);
         let result = solver.solve();
 
         assert!(matches!(result, SolveResult::Solved(_)));
@@ -510,7 +529,7 @@ mod tests {
         let game = Game::from_text(input).unwrap();
 
         let heuristic = crate::heuristic::GreedyHeuristic::new(&game);
-        let mut solver = Solver::new(5000000, heuristic, SearchType::Forwards, &game);
+        let mut solver = Solver::new(5000000, heuristic, SearchType::Forwards, &game, true);
         let result = solver.solve();
 
         assert!(matches!(result, SolveResult::Solved(_)));
@@ -534,7 +553,7 @@ mod tests {
         let game = Game::from_text(input).unwrap();
 
         let heuristic = crate::heuristic::GreedyHeuristic::new(&game);
-        let mut solver = Solver::new(5000000, heuristic, SearchType::Forwards, &game);
+        let mut solver = Solver::new(5000000, heuristic, SearchType::Forwards, &game, true);
         let result = solver.solve();
         assert_eq!(result, SolveResult::Impossible);
     }
