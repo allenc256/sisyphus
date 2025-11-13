@@ -51,6 +51,13 @@ fn print_solution(game: &Game, solution: &[MoveByPos]) {
     }
 }
 
+struct LevelStats {
+    solved: bool,
+    steps: usize,
+    states_explored: usize,
+    elapsed_ms: u128,
+}
+
 fn solve_level_with_heuristic<H: Heuristic>(
     level_num: usize,
     game: &Game,
@@ -59,7 +66,7 @@ fn solve_level_with_heuristic<H: Heuristic>(
     heuristic: H,
     search_type: SearchType,
     freeze_deadlocks: bool,
-) {
+) -> LevelStats {
     let mut solver = Solver::new(
         max_nodes_explored,
         heuristic,
@@ -72,25 +79,31 @@ fn solve_level_with_heuristic<H: Heuristic>(
     let elapsed = start.elapsed();
     let (nodes_forwards, nodes_backwards) = solver.nodes_explored();
 
-    let (solved_char, solution_len) = match &result {
-        SolveResult::Solved(solution) => ('Y', solution.len()),
-        SolveResult::Cutoff => ('N', 0),
-        SolveResult::Impossible => ('X', 0),
+    let total_states = nodes_forwards + nodes_backwards;
+    let elapsed_ms = elapsed.as_millis();
+
+    let (solved_char, solution_len, solved) = match &result {
+        SolveResult::Solved(solution) => ('Y', solution.len(), true),
+        SolveResult::Cutoff => ('N', 0, false),
+        SolveResult::Impossible => ('X', 0, false),
     };
 
     println!(
-        "level: {:<3}  solved: {}  steps: {:<3}  states: {:<10}  elapsed: {} ms",
-        level_num,
-        solved_char,
-        solution_len,
-        nodes_forwards + nodes_backwards,
-        elapsed.as_millis()
+        "level: {:<3}  solved: {}  steps: {:<5}  states: {:<12}  elapsed: {} ms",
+        level_num, solved_char, solution_len, total_states, elapsed_ms
     );
 
     if print_solution_flag {
         if let SolveResult::Solved(solution) = result {
             print_solution(game, &solution);
         }
+    }
+
+    LevelStats {
+        solved,
+        steps: solution_len,
+        states_explored: total_states,
+        elapsed_ms,
     }
 }
 
@@ -102,7 +115,7 @@ fn solve_level(
     heuristic_type: HeuristicType,
     search_type: SearchType,
     freeze_deadlocks: bool,
-) {
+) -> LevelStats {
     match heuristic_type {
         HeuristicType::Greedy => solve_level_with_heuristic(
             level_num,
@@ -176,6 +189,7 @@ fn main() {
 
     // Determine the range of levels to solve
     let level_end = args.level_end.unwrap_or(args.level_start);
+    let num_levels = level_end - args.level_start + 1;
 
     // Validate range
     if args.level_start == 0 {
@@ -197,10 +211,20 @@ fn main() {
         std::process::exit(1);
     }
 
+    if args.print_solution && num_levels > 1 {
+        eprintln!("Error: solution printing only supported when solving a single level");
+        std::process::exit(1);
+    }
+
     // Solve each level in the range
+    let mut total_solved = 0;
+    let mut total_steps = 0;
+    let mut total_states = 0;
+    let mut total_time_ms = 0;
+
     for level_num in args.level_start..=level_end {
         let game = levels.get(level_num - 1).unwrap();
-        solve_level(
+        let stats = solve_level(
             level_num,
             game,
             args.print_solution,
@@ -208,6 +232,22 @@ fn main() {
             args.heuristic,
             args.direction.into(),
             !args.no_freeze_deadlocks,
+        );
+
+        if stats.solved {
+            total_solved += 1;
+        }
+        total_steps += stats.steps;
+        total_states += stats.states_explored;
+        total_time_ms += stats.elapsed_ms;
+    }
+
+    // Print summary statistics if multiple levels were solved
+    if num_levels > 1 {
+        println!("---");
+        println!(
+            "solved: {:>3}/{:<3}        steps: {:<5}  states: {:<12}  elapsed: {} ms",
+            total_solved, num_levels, total_steps, total_states, total_time_ms
         );
     }
 }
