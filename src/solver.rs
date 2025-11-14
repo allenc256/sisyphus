@@ -373,6 +373,12 @@ impl<H: Heuristic> Solver<H> {
         }
     }
 
+    // Implements bidirectional search. Note that this implementation does not
+    // guarantee optimal solution paths in general. This is because the A*
+    // search going from either end is not guaranteed to explore the states in
+    // order of BFS distance. This means that when we find a solution (i.e.,
+    // when the forwards and backwards searchers overlap), the combined solution
+    // might not be optimal.
     pub fn solve(&mut self) -> SolveResult {
         let mut forwards_threshold = 0;
         let mut backwards_threshold = 0;
