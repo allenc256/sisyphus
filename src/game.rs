@@ -163,7 +163,7 @@ impl Iterator for MovesIter {
     }
 }
 
-impl<'a> IntoIterator for &'a Moves {
+impl IntoIterator for &'_ Moves {
     type Item = Move;
     type IntoIter = MovesIter;
 
