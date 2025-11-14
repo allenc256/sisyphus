@@ -1,5 +1,5 @@
 use crate::game::{ALL_DIRECTIONS, Game, MAX_BOXES, MAX_SIZE, Tile};
-use std::collections::VecDeque;
+use std::{collections::VecDeque, u16};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Cost {
@@ -136,31 +136,99 @@ impl GreedyHeuristic {
     }
 
     fn greedy_distance(game: &Game, distances: &[[[u16; MAX_SIZE]; MAX_SIZE]; MAX_BOXES]) -> Cost {
-        let mut total_distance = 0u16;
+        let mut box_to_dst_total = 0u16;
+        let mut dst_to_box = [u16::MAX; MAX_BOXES];
         let box_count = game.box_count();
 
         // For each box, find the closest destination
         for i in 0..box_count {
             let pos = game.box_pos(i);
-            let mut min_distance = u16::MAX;
+            let mut box_to_dst = u16::MAX;
 
             // Find the minimum distance to any destination
             for dst_idx in 0..box_count {
                 let distance = distances[dst_idx][pos.1 as usize][pos.0 as usize];
-                if distance < min_distance {
-                    min_distance = distance;
-                }
+                box_to_dst = std::cmp::min(box_to_dst, distance);
+                dst_to_box[dst_idx] = std::cmp::min(dst_to_box[dst_idx], distance);
             }
 
-            if min_distance == u16::MAX {
+            if box_to_dst == u16::MAX {
                 return Cost::Impossible;
             }
 
-            total_distance += min_distance;
+            box_to_dst_total += box_to_dst;
         }
 
-        Cost::Solvable(total_distance)
+        let mut dst_to_box_total = 0;
+        for i in 0..box_count {
+            let dist = dst_to_box[i];
+            if dist == u16::MAX {
+                return Cost::Impossible;
+            } else {
+                dst_to_box_total += dist;
+            }
+        }
+
+        Cost::Solvable(std::cmp::max(dst_to_box_total, box_to_dst_total))
     }
+
+    // fn greedy_distance_box_to_goal(
+    //     game: &Game,
+    //     distances: &[[[u16; MAX_SIZE]; MAX_SIZE]; MAX_BOXES],
+    // ) -> u16 {
+    //     let mut total_distance = 0u16;
+    //     let box_count = game.box_count();
+
+    //     for dst_idx in 0..box_count {
+    //         let mut min_distance = u16::MAX;
+
+    //         for i in 0..box_count {
+    //             let pos = game.box_pos(i);
+    //             let distance = distances[dst_idx][pos.1 as usize][pos.0 as usize];
+    //             if distance < min_distance {
+    //                 min_distance = distance;
+    //             }
+    //         }
+
+    //         if min_distance == u16::MAX {
+    //             return u16::MAX;
+    //         }
+
+    //         total_distance += min_distance;
+    //     }
+
+    //     total_distance
+    // }
+
+    // fn greedy_distance_goal_to_boxl(
+    //     game: &Game,
+    //     distances: &[[[u16; MAX_SIZE]; MAX_SIZE]; MAX_BOXES],
+    // ) -> u16 {
+    //     let mut total_distance = 0u16;
+    //     let box_count = game.box_count();
+
+    //     // For each box, find the closest destination
+    //     for i in 0..box_count {
+    //         let pos = game.box_pos(i);
+    //         let mut min_distance = u16::MAX;
+
+    //         // Find the minimum distance to any destination
+    //         for dst_idx in 0..box_count {
+    //             let distance = distances[dst_idx][pos.1 as usize][pos.0 as usize];
+    //             if distance < min_distance {
+    //                 min_distance = distance;
+    //             }
+    //         }
+
+    //         if min_distance == u16::MAX {
+    //             return u16::MAX;
+    //         }
+
+    //         total_distance += min_distance;
+    //     }
+
+    //     total_distance
+    // }
 }
 
 impl Heuristic for GreedyHeuristic {
