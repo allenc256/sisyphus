@@ -42,6 +42,7 @@ pub struct GreedyHeuristic {
     start_distances: Box<[[[u16; MAX_SIZE]; MAX_SIZE]; MAX_BOXES]>,
 }
 
+#[allow(clippy::needless_range_loop)]
 impl GreedyHeuristic {
     pub fn new(game: &Game) -> Self {
         let goal_distances = Box::new(Self::compute_distances_from_goals(game));

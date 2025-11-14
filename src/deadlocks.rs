@@ -31,7 +31,7 @@ impl Frozen {
         if game.get_tile(x, y) == Tile::Wall {
             return true;
         }
-        if !game.box_at(x, y).is_some() {
+        if game.box_at(x, y).is_none() {
             return false;
         }
         if self.visited.get(x, y) {
