@@ -562,18 +562,20 @@ impl Game {
     /// If the game is already solved, returns empty pushes and Unknown player position.
     /// Panics if the player position is Unknown (and game is not solved).
     pub fn compute_pushes(&self) -> (Moves, PlayerPos) {
+        let mut reachable = LazyBitboard::new();
+        self.compute_pushes_helper(&mut reachable)
+    }
+
+    fn compute_pushes_helper(&self, reachable: &mut LazyBitboard) -> (Moves, PlayerPos) {
         // Short-circuit if already solved
         if self.is_solved() {
             return (Moves::new(), PlayerPos::Unknown);
         }
-
         let PlayerPos::Known(x, y) = self.player else {
             panic!("Cannot compute pushes when player position is unknown");
         };
-
         let mut pushes = Moves::new();
-        let mut reachable = LazyBitboard::new();
-        let canonical_pos = self.player_dfs((x, y), &mut reachable, |_player_pos, dir, box_idx| {
+        let canonical_pos = self.player_dfs((x, y), reachable, |_player_pos, dir, box_idx| {
             // For pushes: check if the box can move forward in the direction
             let box_pos = self.box_pos(box_idx as usize);
             if let Some((dest_x, dest_y)) = self.push_pos(box_pos.0, box_pos.1, dir) {
@@ -586,6 +588,64 @@ impl Game {
             }
         });
         (pushes, PlayerPos::Known(canonical_pos.0, canonical_pos.1))
+    }
+
+    pub fn compute_pi_corral_pushes(&self) -> (Moves, PlayerPos) {
+        let mut corral_reachable = LazyBitboard::new();
+        let mut player_reachable = LazyBitboard::new();
+        let (pushes, canonical_pos) = self.compute_pushes_helper(&mut player_reachable);
+
+        for push in pushes.iter() {
+            let (bx, by) = self.box_pos(push.box_index as usize);
+            let Some((nx, ny)) = self.push_pos(bx, by, push.direction) else {
+                panic!("Invalid push");
+            };
+            if !player_reachable.get(nx, ny) && !corral_reachable.get(nx, ny) {
+                if let Some(corral_pushes) = self.compute_pi_corral_helper(
+                    nx,
+                    ny,
+                    &mut corral_reachable,
+                    &mut player_reachable,
+                ) {
+                    return (corral_pushes, canonical_pos);
+                }
+            }
+        }
+
+        return (pushes, canonical_pos);
+    }
+
+    fn compute_pi_corral_helper(
+        &self,
+        x: u8,
+        y: u8,
+        corral_reachable: &mut LazyBitboard,
+        player_reachable: &mut LazyBitboard,
+    ) -> Option<Moves> {
+        // Stack-allocated stack for DFS using ArrayVec
+        let mut stack: ArrayVec<(u8, u8), { MAX_SIZE * MAX_SIZE }> = ArrayVec::new();
+        let mut pushes = Moves::new();
+
+        // Start DFS from the given position
+        stack.push((x, y));
+        corral_reachable.set(x, y);
+
+        while let Some((cx, cy)) = stack.pop() {
+            for &dir in &ALL_DIRECTIONS {
+                if let Some((nx, ny)) = self.push_pos(cx, cy, dir) {
+                    if self.get_tile(nx, ny) == Tile::Wall
+                        || player_reachable.get(nx, ny)
+                        || corral_reachable.get(nx, ny)
+                    {
+                        continue;
+                    }
+                    corral_reachable.set(nx, ny);
+                    stack.push((nx, ny));
+                }
+            }
+        }
+
+        None
     }
 
     /// Compute all possible pulls from the current game state.
