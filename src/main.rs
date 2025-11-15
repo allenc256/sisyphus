@@ -1,4 +1,4 @@
-mod bitboard;
+mod bits;
 mod deadlocks;
 mod game;
 mod heuristic;

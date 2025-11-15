@@ -1,4 +1,4 @@
-use crate::bitboard::LazyBitboard;
+use crate::bits::LazyBitboard;
 use crate::game::{Direction, Game, Tile};
 
 pub struct Deadlocks {}

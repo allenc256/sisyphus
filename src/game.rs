@@ -1,4 +1,4 @@
-use crate::bitboard::LazyBitboard;
+use crate::bits::{Bitvector, BitvectorIter, LazyBitboard};
 use arrayvec::ArrayVec;
 use std::fmt;
 
@@ -89,49 +89,55 @@ pub struct MoveByPos {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Moves {
     // Bitset: bits[0] = Up, bits[1] = Down, bits[2] = Left, bits[3] = Right
-    // Each u64 holds 64 bits for 64 boxes (box indices 0-63)
-    bits: [u64; 4],
+    // Each Bitvector holds 64 bits for 64 boxes (box indices 0-63)
+    bits: [Bitvector; 4],
 }
 
 impl Moves {
     fn new() -> Self {
-        Moves { bits: [0; 4] }
+        Moves {
+            bits: [Bitvector::new(); 4],
+        }
     }
 
     fn add(&mut self, box_index: u8, direction: Direction) {
         let dir_idx = direction.index();
-        self.bits[dir_idx] |= 1u64 << box_index;
+        self.bits[dir_idx].set(box_index);
     }
 
     pub fn len(&self) -> usize {
-        self.bits
-            .iter()
-            .map(|&word| word.count_ones() as usize)
-            .sum()
+        self.bits.iter().map(|bv| bv.len()).sum()
+    }
+
+    pub fn boxes(&self) -> Bitvector {
+        self.bits[0]
+            .union(&self.bits[1])
+            .union(&self.bits[2])
+            .union(&self.bits[3])
     }
 
     pub fn is_empty(&self) -> bool {
-        self.bits.iter().all(|&word| word == 0)
+        self.boxes().is_empty()
     }
 
     pub fn contains(&self, push: Move) -> bool {
         let dir_idx = push.direction.index();
-        (self.bits[dir_idx] & (1u64 << push.box_index)) != 0
+        self.bits[dir_idx].get(push.box_index)
     }
 
     pub fn iter(&self) -> MovesIter {
         MovesIter {
             bits: self.bits,
             dir_idx: 0,
-            current_bits: self.bits[0],
+            current_iter: self.bits[0].iter(),
         }
     }
 }
 
 pub struct MovesIter {
-    bits: [u64; 4],
+    bits: [Bitvector; 4],
     dir_idx: usize,
-    current_bits: u64,
+    current_iter: BitvectorIter,
 }
 
 impl Iterator for MovesIter {
@@ -139,13 +145,7 @@ impl Iterator for MovesIter {
 
     fn next(&mut self) -> Option<Self::Item> {
         loop {
-            if self.current_bits != 0 {
-                // Find the lowest set bit
-                let box_index = self.current_bits.trailing_zeros() as u8;
-
-                // Clear the lowest set bit
-                self.current_bits &= self.current_bits - 1;
-
+            if let Some(box_index) = self.current_iter.next() {
                 let direction = Direction::from_index(self.dir_idx);
                 return Some(Move {
                     box_index,
@@ -158,7 +158,7 @@ impl Iterator for MovesIter {
             if self.dir_idx >= 4 {
                 return None;
             }
-            self.current_bits = self.bits[self.dir_idx];
+            self.current_iter = self.bits[self.dir_idx].iter();
         }
     }
 }
