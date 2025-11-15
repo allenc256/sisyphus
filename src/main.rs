@@ -58,6 +58,7 @@ struct LevelStats {
     elapsed_ms: u128,
 }
 
+#[allow(clippy::too_many_arguments)]
 fn solve_level_with_heuristic<H: Heuristic>(
     level_num: usize,
     game: &Game,
@@ -66,6 +67,7 @@ fn solve_level_with_heuristic<H: Heuristic>(
     heuristic: H,
     search_type: SearchType,
     freeze_deadlocks: bool,
+    pi_corrals: bool,
 ) -> LevelStats {
     let mut solver = Solver::new(
         max_nodes_explored,
@@ -73,6 +75,7 @@ fn solve_level_with_heuristic<H: Heuristic>(
         search_type,
         game,
         freeze_deadlocks,
+        pi_corrals,
     );
     let start = Instant::now();
     let result = solver.solve();
@@ -107,6 +110,7 @@ fn solve_level_with_heuristic<H: Heuristic>(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn solve_level(
     level_num: usize,
     game: &Game,
@@ -115,6 +119,7 @@ fn solve_level(
     heuristic_type: HeuristicType,
     search_type: SearchType,
     freeze_deadlocks: bool,
+    pi_corrals: bool,
 ) -> LevelStats {
     match heuristic_type {
         HeuristicType::Greedy => solve_level_with_heuristic(
@@ -125,6 +130,7 @@ fn solve_level(
             GreedyHeuristic::new(game),
             search_type,
             freeze_deadlocks,
+            pi_corrals,
         ),
         HeuristicType::Null => solve_level_with_heuristic(
             level_num,
@@ -134,6 +140,7 @@ fn solve_level(
             NullHeuristic::new(),
             search_type,
             freeze_deadlocks,
+            pi_corrals,
         ),
     }
 }
@@ -173,6 +180,10 @@ struct Args {
     /// Disable freeze deadlock detection
     #[arg(long, default_value = "false")]
     no_freeze_deadlocks: bool,
+
+    /// Disable PI-corral pruning
+    #[arg(long, default_value = "false")]
+    no_pi_corrals: bool,
 }
 
 fn main() {
@@ -232,6 +243,7 @@ fn main() {
             args.heuristic,
             args.direction.into(),
             !args.no_freeze_deadlocks,
+            !args.no_pi_corrals,
         );
 
         if stats.solved {

@@ -1,5 +1,5 @@
 use crate::game::{ALL_DIRECTIONS, Game, MAX_BOXES, MAX_SIZE, Tile};
-use std::{collections::VecDeque, u16};
+use std::collections::VecDeque;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Cost {

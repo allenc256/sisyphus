@@ -10,12 +10,12 @@ impl Bitvector {
         Self { bits: 0 }
     }
 
-    pub fn get(&self, index: u8) -> bool {
+    pub fn contains(&self, index: u8) -> bool {
         assert!(index < 64, "index out of bounds");
         (self.bits & (1u64 << index)) != 0
     }
 
-    pub fn set(&mut self, index: u8) {
+    pub fn add(&mut self, index: u8) {
         assert!(index < 64, "index out of bounds");
         self.bits |= 1u64 << index;
     }
@@ -100,20 +100,20 @@ mod tests {
     #[test]
     fn test_bitvector_get_set() {
         let mut bv = Bitvector::new();
-        assert!(!bv.get(0));
-        assert!(!bv.get(5));
-        assert!(!bv.get(63));
+        assert!(!bv.contains(0));
+        assert!(!bv.contains(5));
+        assert!(!bv.contains(63));
 
-        bv.set(5);
-        assert!(!bv.get(0));
-        assert!(bv.get(5));
-        assert!(!bv.get(63));
+        bv.add(5);
+        assert!(!bv.contains(0));
+        assert!(bv.contains(5));
+        assert!(!bv.contains(63));
 
-        bv.set(0);
-        bv.set(63);
-        assert!(bv.get(0));
-        assert!(bv.get(5));
-        assert!(bv.get(63));
+        bv.add(0);
+        bv.add(63);
+        assert!(bv.contains(0));
+        assert!(bv.contains(5));
+        assert!(bv.contains(63));
     }
 
     #[test]
@@ -121,10 +121,10 @@ mod tests {
         let mut bv = Bitvector::new();
         assert!(bv.is_empty());
 
-        bv.set(0);
+        bv.add(0);
         assert!(!bv.is_empty());
 
-        bv.set(63);
+        bv.add(63);
         assert!(!bv.is_empty());
     }
 
@@ -133,27 +133,27 @@ mod tests {
         let mut bv = Bitvector::new();
         assert_eq!(bv.len(), 0);
 
-        bv.set(0);
+        bv.add(0);
         assert_eq!(bv.len(), 1);
 
-        bv.set(5);
+        bv.add(5);
         assert_eq!(bv.len(), 2);
 
-        bv.set(63);
+        bv.add(63);
         assert_eq!(bv.len(), 3);
 
         // Setting the same bit again should not change length
-        bv.set(5);
+        bv.add(5);
         assert_eq!(bv.len(), 3);
     }
 
     #[test]
     fn test_bitvector_iter() {
         let mut bv = Bitvector::new();
-        bv.set(0);
-        bv.set(5);
-        bv.set(10);
-        bv.set(63);
+        bv.add(0);
+        bv.add(5);
+        bv.add(10);
+        bv.add(63);
 
         let indexes: Vec<u8> = bv.iter().collect();
         assert_eq!(indexes, vec![0, 5, 10, 63]);
@@ -170,7 +170,7 @@ mod tests {
     fn test_bitvector_iter_all() {
         let mut bv = Bitvector::new();
         for i in 0..64 {
-            bv.set(i);
+            bv.add(i);
         }
         let indexes: Vec<u8> = bv.iter().collect();
         assert_eq!(indexes.len(), 64);

@@ -102,7 +102,7 @@ impl Moves {
 
     fn add(&mut self, box_index: u8, direction: Direction) {
         let dir_idx = direction.index();
-        self.bits[dir_idx].set(box_index);
+        self.bits[dir_idx].add(box_index);
     }
 
     pub fn len(&self) -> usize {
@@ -122,7 +122,7 @@ impl Moves {
 
     pub fn contains(&self, push: Move) -> bool {
         let dir_idx = push.direction.index();
-        self.bits[dir_idx].get(push.box_index)
+        self.bits[dir_idx].contains(push.box_index)
     }
 
     pub fn iter(&self) -> MovesIter {
@@ -562,7 +562,17 @@ impl Game {
     /// If the game is already solved, returns empty pushes and Unknown player position.
     /// Panics if the player position is Unknown (and game is not solved).
     pub fn compute_pushes(&self) -> (Moves, PlayerPos) {
-        // Short-circuit if already solved
+        let mut visited = LazyBitboard::new();
+        let mut boxes = Bitvector::new();
+        self.compute_pushes_helper(&mut visited, &mut boxes)
+    }
+
+    fn compute_pushes_helper(
+        &self,
+        visited: &mut LazyBitboard,
+        boxes: &mut Bitvector,
+    ) -> (Moves, PlayerPos) {
+        // We don't report moves when the game is solved.
         if self.is_solved() {
             return (Moves::new(), PlayerPos::Unknown);
         }
@@ -570,22 +580,158 @@ impl Game {
         let PlayerPos::Known(x, y) = self.player else {
             panic!("Cannot compute pushes when player position is unknown");
         };
-
         let mut pushes = Moves::new();
-        let mut reachable = LazyBitboard::new();
-        let canonical_pos = self.player_dfs((x, y), &mut reachable, |_player_pos, dir, box_idx| {
-            // For pushes: check if the box can move forward in the direction
+        let canonical_pos = self.player_dfs((x, y), visited, |_player_pos, dir, box_idx| {
+            boxes.add(box_idx);
             let box_pos = self.box_pos(box_idx as usize);
             if let Some((dest_x, dest_y)) = self.push_pos(box_pos.0, box_pos.1, dir) {
-                let dest_tile = self.get_tile(dest_x, dest_y);
-                if !self.boxes.has_box_at(dest_x, dest_y)
-                    && (dest_tile == Tile::Floor || dest_tile == Tile::Goal)
-                {
+                if !self.is_blocked(dest_x, dest_y) {
                     pushes.add(box_idx, dir);
                 }
             }
         });
         (pushes, PlayerPos::Known(canonical_pos.0, canonical_pos.1))
+    }
+
+    pub fn compute_pi_corral_pushes(&self) -> (Moves, PlayerPos) {
+        let mut player_reachable = LazyBitboard::new();
+        let mut player_reachable_boxes = Bitvector::new();
+        let mut corrals_visited = LazyBitboard::new();
+        let mut min_corral_size = usize::MAX;
+
+        // Start by computing pushes, reachable positions, and reachable boxes
+        let (mut player_pushes, canonical_pos) =
+            self.compute_pushes_helper(&mut player_reachable, &mut player_reachable_boxes);
+
+        // Now walk through each push and examine the other side of the push for
+        // a PI corral. Note that we only need to consider corrals that are the
+        // other side of a valid player push (any corral NOT on the other side
+        // of a player push full the "P" condition of a PI-corral).
+        for push in player_pushes.iter() {
+            let (bx, by) = self.box_pos(push.box_index as usize);
+            let Some((nx, ny)) = self.push_pos(bx, by, push.direction) else {
+                panic!("Invalid push");
+            };
+            if !player_reachable.get(nx, ny) && !corrals_visited.get(nx, ny) {
+                if let Some((corral_pushes, corral_size)) = self.compute_pi_corral_helper(
+                    nx,
+                    ny,
+                    &player_reachable,
+                    player_reachable_boxes,
+                    &mut corrals_visited,
+                ) {
+                    // If we've found a PI-corral, check if this is is the
+                    // smallest PI-corral we've found so far. If it is, set the
+                    // player pushes to this PI-corral's pushes.
+                    if corral_size < min_corral_size {
+                        player_pushes = corral_pushes;
+                        min_corral_size = corral_size;
+                    }
+                }
+            }
+        }
+
+        (player_pushes, canonical_pos)
+    }
+
+    fn compute_pi_corral_helper(
+        &self,
+        x: u8,
+        y: u8,
+        player_reachable: &LazyBitboard,
+        player_reachable_boxes: Bitvector,
+        corrals_visited: &mut LazyBitboard,
+    ) -> Option<(Moves, usize)> {
+        assert!(!player_reachable.get(x, y));
+
+        let mut stack: ArrayVec<(u8, u8), { MAX_SIZE * MAX_SIZE }> = ArrayVec::new();
+        let mut corral_visited = LazyBitboard::new();
+        let mut corral_edge_boxes = Bitvector::new();
+        let mut corral_pushes = Moves::new();
+        let mut corral_size = 0;
+        let mut corral_valid = false;
+
+        // Start DFS from the given position
+        stack.push((x, y));
+        corral_visited.set(x, y);
+        corrals_visited.set(x, y);
+        corral_size += 1;
+
+        // Perform DFS to find full extent of corral
+        while let Some((cx, cy)) = stack.pop() {
+            let is_goal = self.get_tile(cx, cy) == Tile::Goal;
+
+            // We've hit a box
+            if let Some(box_idx) = self.box_at(cx, cy) {
+                // Box not on goal: corral requires pushes to solve the puzzle
+                if !is_goal {
+                    corral_valid = true;
+                }
+                // If we've hit the edge of the corral, stop exploring further
+                if player_reachable_boxes.contains(box_idx) {
+                    corral_edge_boxes.add(box_idx);
+                    continue;
+                }
+            } else if is_goal {
+                // Goal without a box: corral requires pushes to solve the puzzle
+                corral_valid = true;
+            }
+
+            // Otherwise, continue searching in all directions
+            for &dir in &ALL_DIRECTIONS {
+                if let Some((nx, ny)) = self.push_pos(cx, cy, dir) {
+                    if self.get_tile(nx, ny) != Tile::Wall && !corral_visited.get(nx, ny) {
+                        stack.push((nx, ny));
+                        corral_visited.set(nx, ny);
+                        corrals_visited.set(nx, ny);
+                        corral_size += 1;
+                    }
+                }
+            }
+        }
+
+        // Check the PI conditions over the edge boxes
+        for box_idx in corral_edge_boxes.iter() {
+            let (bx, by) = self.box_pos(box_idx as usize);
+            for &dir in &ALL_DIRECTIONS {
+                if let (Some((nx, ny)), Some((px, py))) =
+                    (self.push_pos(bx, by, dir), self.pull_pos(bx, by, dir))
+                {
+                    // Ignore pushes originating from within the corral
+                    if corral_visited.get(px, py) {
+                        continue;
+                    }
+                    // Ignore pushes into a wall or box
+                    if self.is_blocked(nx, ny) {
+                        continue;
+                    }
+                    // Ignore pushes coming from a wall
+                    if self.get_tile(px, py) == Tile::Wall {
+                        continue;
+                    }
+                    // Check I condition: the push must lead into the corral
+                    if !corral_visited.get(nx, ny) {
+                        return None;
+                    }
+                    // Check P condition: the player must be capable of making the push
+                    if !player_reachable.get(px, py) {
+                        return None;
+                    }
+                    // Everything checks out for this push
+                    corral_pushes.add(box_idx, dir);
+                }
+            }
+        }
+
+        if corral_valid {
+            Some((corral_pushes, corral_size))
+        } else {
+            None
+        }
+    }
+
+    fn is_blocked(&self, x: u8, y: u8) -> bool {
+        self.get_tile(x, y) == Tile::Wall || self.boxes.has_box_at(x, y)
     }
 
     /// Compute all possible pulls from the current game state.
@@ -594,11 +740,11 @@ impl Game {
     /// and returns Unknown as the canonical position.
     pub fn compute_pulls(&self) -> (Moves, PlayerPos) {
         let mut pulls = Moves::new();
-        let mut reachable = LazyBitboard::new();
+        let mut visited = LazyBitboard::new();
 
         match self.player {
             PlayerPos::Known(x, y) => {
-                let canonical_pos = self.compute_pulls_helper((x, y), &mut reachable, &mut pulls);
+                let canonical_pos = self.compute_pulls_helper((x, y), &mut visited, &mut pulls);
                 (pulls, PlayerPos::Known(canonical_pos.0, canonical_pos.1))
             }
             PlayerPos::Unknown => {
@@ -607,7 +753,7 @@ impl Game {
                 for y in 0..self.height {
                     for x in 0..self.width {
                         // Skip if already explored from a previous position
-                        if reachable.get(x, y) {
+                        if visited.get(x, y) {
                             continue;
                         }
 
@@ -615,7 +761,7 @@ impl Game {
                         if (tile == Tile::Floor || tile == Tile::Goal)
                             && !self.boxes.has_box_at(x, y)
                         {
-                            self.compute_pulls_helper((x, y), &mut reachable, &mut pulls);
+                            self.compute_pulls_helper((x, y), &mut visited, &mut pulls);
                         }
                     }
                 }
@@ -627,18 +773,12 @@ impl Game {
     fn compute_pulls_helper(
         &self,
         player: (u8, u8),
-        reachable: &mut LazyBitboard,
+        visited: &mut LazyBitboard,
         pulls: &mut Moves,
     ) -> (u8, u8) {
-        self.player_dfs(player, reachable, |(x, y), dir, box_idx| {
-            // For pull: box at (nx, ny), player at (x, y)
-            // Box moves to (x, y), player moves to (x, y) - dir
-            // Check if player destination is free
+        self.player_dfs(player, visited, |(x, y), dir, box_idx| {
             if let Some((dest_x, dest_y)) = self.pull_pos(x, y, dir) {
-                let dest_tile = self.get_tile(dest_x, dest_y);
-                if !self.boxes.has_box_at(dest_x, dest_y)
-                    && (dest_tile == Tile::Floor || dest_tile == Tile::Goal)
-                {
+                if !self.is_blocked(dest_x, dest_y) {
                     pulls.add(box_idx, dir);
                 }
             }
@@ -651,7 +791,7 @@ impl Game {
     fn player_dfs<F>(
         &self,
         start_player: (u8, u8),
-        reachable: &mut LazyBitboard,
+        visited: &mut LazyBitboard,
         mut on_box: F,
     ) -> (u8, u8)
     where
@@ -664,7 +804,7 @@ impl Game {
 
         // DFS from player position to find all reachable positions
         stack.push(start_player);
-        reachable.set(start_player.0, start_player.1);
+        visited.set(start_player.0, start_player.1);
 
         while let Some((x, y)) = stack.pop() {
             // Check all 4 directions
@@ -675,9 +815,9 @@ impl Game {
                         on_box((x, y), dir, box_idx);
                     } else {
                         let tile = self.get_tile(nx, ny);
-                        if (tile == Tile::Floor || tile == Tile::Goal) && !reachable.get(nx, ny) {
+                        if (tile == Tile::Floor || tile == Tile::Goal) && !visited.get(nx, ny) {
                             // Continue DFS to this floor/goal tile
-                            reachable.set(nx, ny);
+                            visited.set(nx, ny);
 
                             // Update canonical position if this is lexicographically smaller
                             if (nx, ny) < canonical_pos {
@@ -1229,5 +1369,181 @@ mod tests {
                 direction
             );
         }
+    }
+
+    #[test]
+    fn test_pi_corral_1() {
+        let game = parse_game(
+            r#"
+########
+#  $  .#
+#   $@.#
+#  $  .#
+####   #
+   # $.#
+   #####
+"#,
+        );
+
+        check_pi_corral(&game, 3, 2, None);
+    }
+
+    #[test]
+    fn test_pi_corral_2() {
+        let game = parse_game(
+            r#"
+########
+#  $  .#
+#   $@.#
+#  $# .#
+####   #
+   # $.#
+   #####
+"#,
+        );
+
+        let mut expected_moves = Moves::new();
+        expected_moves.add(0, Direction::Left);
+        expected_moves.add(1, Direction::Left);
+        let expected_size = 10;
+
+        check_pi_corral(&game, 3, 2, Some((expected_moves, expected_size)));
+    }
+
+    #[test]
+    fn test_pi_corral_3() {
+        let game = parse_game(
+            r#"
+########
+#.$.$ .#
+#.  $@$#
+#. $   #
+####   #
+   #   #
+   #####
+"#,
+        );
+
+        let mut expected_moves = Moves::new();
+        expected_moves.add(1, Direction::Left);
+        expected_moves.add(2, Direction::Left);
+        expected_moves.add(4, Direction::Left);
+        let expected_size = 11;
+
+        check_pi_corral(&game, 3, 2, Some((expected_moves, expected_size)));
+    }
+
+    #[test]
+    fn test_pi_corral_4() {
+        let game = parse_game(
+            r#"
+########
+#.  $ .#
+#. $@ $#
+#. $$  #
+####   #
+   #  .#
+   #####
+"#,
+        );
+
+        check_pi_corral(&game, 2, 2, None);
+    }
+
+    #[test]
+    fn test_pi_corral_5() {
+        let game = parse_game(
+            r#"
+########
+#.  $ .#
+#. $@ $#
+#. $#  #
+####   #
+   #   #
+   #####
+"#,
+        );
+
+        let mut expected_moves = Moves::new();
+        expected_moves.add(0, Direction::Left);
+        expected_moves.add(1, Direction::Left);
+        let expected_size = 10;
+
+        check_pi_corral(&game, 2, 2, Some((expected_moves, expected_size)));
+    }
+
+    #[test]
+    fn test_pi_corral_6() {
+        let game = parse_game(
+            r#"
+##########
+#   #    #
+#.  $ @$.#
+####$$####
+  #    #
+  # .. #
+  ######
+"#,
+        );
+
+        let mut expected_moves = Moves::new();
+        expected_moves.add(0, Direction::Left);
+        let expected_size = 7;
+
+        check_pi_corral(&game, 3, 2, Some((expected_moves, expected_size)));
+        check_pi_corral(&game, 5, 4, None);
+    }
+
+    #[test]
+    fn test_pi_corral_7() {
+        let game = parse_game(
+            r#"
+        ########
+        #      #
+        # $#$ ##
+        # $  @#
+        ##$ $$#
+######### $ # ###
+#....  ## $  $  #
+##...    $   $  #
+#....  ##########
+########
+"#,
+        );
+
+        let mut corral1_moves = Moves::new();
+        corral1_moves.add(8, Direction::Right);
+        corral1_moves.add(10, Direction::Right);
+        let corral1_size = 6;
+
+        let mut corral2_moves = Moves::new();
+        corral2_moves.add(9, Direction::Left);
+        let corral2_size = 20;
+
+        check_pi_corral(&game, 13, 5, None);
+        check_pi_corral(&game, 14, 7, Some((corral1_moves, corral1_size)));
+        check_pi_corral(&game, 8, 7, Some((corral2_moves, corral2_size)));
+    }
+
+    fn parse_game(text: &str) -> Game {
+        Game::from_text(text.trim_matches('\n')).unwrap()
+    }
+
+    fn check_pi_corral(game: &Game, x: u8, y: u8, expected_result: Option<(Moves, usize)>) {
+        let mut player_reachable = LazyBitboard::new();
+        let mut player_reachable_boxes: Bitvector = Bitvector::new();
+        let mut corrals_visited = LazyBitboard::new();
+
+        game.compute_pushes_helper(&mut player_reachable, &mut player_reachable_boxes);
+
+        let result = game.compute_pi_corral_helper(
+            x,
+            y,
+            &player_reachable,
+            player_reachable_boxes,
+            &mut corrals_visited,
+        );
+
+        assert_eq!(result, expected_result);
     }
 }
