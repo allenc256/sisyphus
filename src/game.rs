@@ -597,23 +597,23 @@ impl Game {
         let mut player_reachable = LazyBitboard::new();
         let mut player_reachable_boxes = Bitvector::new();
         let mut corrals_visited = LazyBitboard::new();
-        let mut min_corral_size = usize::MAX;
+        let mut min_cost = usize::MAX;
 
         // Start by computing pushes, reachable positions, and reachable boxes
-        let (mut player_pushes, canonical_pos) =
+        let (mut pushes, canonical_pos) =
             self.compute_pushes_helper(&mut player_reachable, &mut player_reachable_boxes);
 
         // Now walk through each push and examine the other side of the push for
         // a PI corral. Note that we only need to consider corrals that are the
         // other side of a valid player push (any corral NOT on the other side
         // of a player push full the "P" condition of a PI-corral).
-        for push in player_pushes.iter() {
+        for push in pushes.iter() {
             let (bx, by) = self.box_pos(push.box_index as usize);
             let Some((nx, ny)) = self.push_pos(bx, by, push.direction) else {
                 panic!("Invalid push");
             };
             if !player_reachable.get(nx, ny) && !corrals_visited.get(nx, ny) {
-                if let Some((corral_pushes, corral_size)) = self.compute_pi_corral_helper(
+                if let Some((corral_pushes, cost)) = self.compute_pi_corral_helper(
                     nx,
                     ny,
                     &player_reachable,
@@ -621,17 +621,17 @@ impl Game {
                     &mut corrals_visited,
                 ) {
                     // If we've found a PI-corral, check if this is is the
-                    // smallest PI-corral we've found so far. If it is, set the
-                    // player pushes to this PI-corral's pushes.
-                    if corral_size < min_corral_size {
-                        player_pushes = corral_pushes;
-                        min_corral_size = corral_size;
+                    // lowest "cost" PI-corral we've found so far. If it is, set
+                    // the player pushes to this PI-corral's pushes.
+                    if cost < min_cost {
+                        pushes = corral_pushes;
+                        min_cost = cost;
                     }
                 }
             }
         }
 
-        (player_pushes, canonical_pos)
+        (pushes, canonical_pos)
     }
 
     fn compute_pi_corral_helper(
@@ -646,16 +646,14 @@ impl Game {
 
         let mut stack: ArrayVec<(u8, u8), { MAX_SIZE * MAX_SIZE }> = ArrayVec::new();
         let mut corral_visited = LazyBitboard::new();
-        let mut corral_edge_boxes = Bitvector::new();
-        let mut corral_pushes = Moves::new();
-        let mut corral_size = 0;
-        let mut corral_valid = false;
+        let mut corral_edge = Bitvector::new();
+        let mut pushes = Moves::new();
+        let mut can_prune = false;
 
         // Start DFS from the given position
         stack.push((x, y));
         corral_visited.set(x, y);
         corrals_visited.set(x, y);
-        corral_size += 1;
 
         // Perform DFS to find full extent of corral
         while let Some((cx, cy)) = stack.pop() {
@@ -665,16 +663,16 @@ impl Game {
             if let Some(box_idx) = self.box_at(cx, cy) {
                 // Box not on goal: corral requires pushes to solve the puzzle
                 if !is_goal {
-                    corral_valid = true;
+                    can_prune = true;
                 }
                 // If we've hit the edge of the corral, stop exploring further
                 if player_reachable_boxes.contains(box_idx) {
-                    corral_edge_boxes.add(box_idx);
+                    corral_edge.add(box_idx);
                     continue;
                 }
             } else if is_goal {
                 // Goal without a box: corral requires pushes to solve the puzzle
-                corral_valid = true;
+                can_prune = true;
             }
 
             // Otherwise, continue searching in all directions
@@ -684,14 +682,17 @@ impl Game {
                         stack.push((nx, ny));
                         corral_visited.set(nx, ny);
                         corrals_visited.set(nx, ny);
-                        corral_size += 1;
                     }
                 }
             }
         }
 
+        if !can_prune {
+            return None;
+        }
+
         // Check the PI conditions over the edge boxes
-        for box_idx in corral_edge_boxes.iter() {
+        for box_idx in corral_edge.iter() {
             let (bx, by) = self.box_pos(box_idx as usize);
             for &dir in &ALL_DIRECTIONS {
                 if let (Some((nx, ny)), Some((px, py))) =
@@ -718,16 +719,13 @@ impl Game {
                         return None;
                     }
                     // Everything checks out for this push
-                    corral_pushes.add(box_idx, dir);
+                    pushes.add(box_idx, dir);
                 }
             }
         }
 
-        if corral_valid {
-            Some((corral_pushes, corral_size))
-        } else {
-            None
-        }
+        let cost = pushes.len();
+        Some((pushes, cost))
     }
 
     fn is_blocked(&self, x: u8, y: u8) -> bool {
@@ -1405,7 +1403,7 @@ mod tests {
         let mut expected_moves = Moves::new();
         expected_moves.add(0, Direction::Left);
         expected_moves.add(1, Direction::Left);
-        let expected_size = 10;
+        let expected_size = 2;
 
         check_pi_corral(&game, 3, 2, Some((expected_moves, expected_size)));
     }
@@ -1428,7 +1426,7 @@ mod tests {
         expected_moves.add(1, Direction::Left);
         expected_moves.add(2, Direction::Left);
         expected_moves.add(4, Direction::Left);
-        let expected_size = 11;
+        let expected_size = 3;
 
         check_pi_corral(&game, 3, 2, Some((expected_moves, expected_size)));
     }
@@ -1467,7 +1465,7 @@ mod tests {
         let mut expected_moves = Moves::new();
         expected_moves.add(0, Direction::Left);
         expected_moves.add(1, Direction::Left);
-        let expected_size = 10;
+        let expected_size = 2;
 
         check_pi_corral(&game, 2, 2, Some((expected_moves, expected_size)));
     }
@@ -1488,7 +1486,7 @@ mod tests {
 
         let mut expected_moves = Moves::new();
         expected_moves.add(0, Direction::Left);
-        let expected_size = 7;
+        let expected_size = 1;
 
         check_pi_corral(&game, 3, 2, Some((expected_moves, expected_size)));
         check_pi_corral(&game, 5, 4, None);
@@ -1514,11 +1512,11 @@ mod tests {
         let mut corral1_moves = Moves::new();
         corral1_moves.add(8, Direction::Right);
         corral1_moves.add(10, Direction::Right);
-        let corral1_size = 6;
+        let corral1_size = 2;
 
         let mut corral2_moves = Moves::new();
         corral2_moves.add(9, Direction::Left);
-        let corral2_size = 20;
+        let corral2_size = 1;
 
         check_pi_corral(&game, 13, 5, None);
         check_pi_corral(&game, 14, 7, Some((corral1_moves, corral1_size)));
