@@ -11,7 +11,9 @@ use game::{Game, MoveByPos};
 use heuristic::{GreedyHeuristic, Heuristic, NullHeuristic};
 use levels::Levels;
 use solver::{SearchType, SolveResult, Solver};
-use std::time::Instant;
+use std::{cell::Cell, time::Instant};
+
+use crate::solver::{SearchDirection, Tracer};
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
 enum HeuristicType {
@@ -51,6 +53,43 @@ fn print_solution(game: &Game, solution: &[MoveByPos]) {
     }
 }
 
+struct VerboseTracer {
+    trace_count: Cell<usize>,
+    trace_start: usize,
+    trace_end: usize,
+}
+
+impl VerboseTracer {
+    fn new(from_move: usize, to_move: usize) -> Self {
+        Self {
+            trace_count: Cell::new(0),
+            trace_start: from_move,
+            trace_end: to_move,
+        }
+    }
+}
+
+impl Tracer for VerboseTracer {
+    fn trace_move(
+        &self,
+        search_dir: SearchDirection,
+        game: &Game,
+        threshold: usize,
+        f_cost: usize,
+        g_cost: usize,
+        _move: game::Move,
+    ) {
+        let new_count = self.trace_count.get() + 1;
+        self.trace_count.set(new_count);
+        if self.trace_start <= new_count && new_count <= self.trace_end {
+            println!(
+                "{:?} search for move {} (f_cost={}, g_cost={}, threshold={}):\n{}",
+                search_dir, new_count, f_cost, g_cost, threshold, game
+            );
+        }
+    }
+}
+
 struct LevelStats {
     solved: bool,
     steps: usize,
@@ -58,24 +97,31 @@ struct LevelStats {
     elapsed_ms: u128,
 }
 
-#[allow(clippy::too_many_arguments)]
-fn solve_level_with_heuristic<H: Heuristic>(
+struct SolveOpts {
     level_num: usize,
-    game: &Game,
-    print_solution_flag: bool,
     max_nodes_explored: usize,
-    heuristic: H,
     search_type: SearchType,
+    print_solution: bool,
     freeze_deadlocks: bool,
     pi_corrals: bool,
-) -> LevelStats {
+    trace_range: Option<(usize, usize)>,
+}
+
+fn solve_level_helper<H: Heuristic>(game: &Game, opts: SolveOpts, heuristic: H) -> LevelStats {
+    let tracer: Option<VerboseTracer> = if let Some((trace_start, trace_end)) = opts.trace_range {
+        Some(VerboseTracer::new(trace_start, trace_end))
+    } else {
+        None
+    };
+
     let mut solver = Solver::new(
-        max_nodes_explored,
+        opts.max_nodes_explored,
         heuristic,
-        search_type,
+        opts.search_type,
         game,
-        freeze_deadlocks,
-        pi_corrals,
+        opts.freeze_deadlocks,
+        opts.pi_corrals,
+        tracer,
     );
     let start = Instant::now();
     let result = solver.solve();
@@ -93,10 +139,10 @@ fn solve_level_with_heuristic<H: Heuristic>(
 
     println!(
         "level: {:<3}  solved: {}  steps: {:<5}  states: {:<12}  elapsed: {} ms",
-        level_num, solved_char, solution_len, total_states, elapsed_ms
+        opts.level_num, solved_char, solution_len, total_states, elapsed_ms
     );
 
-    if print_solution_flag {
+    if opts.print_solution {
         if let SolveResult::Solved(solution) = result {
             print_solution(game, &solution);
         }
@@ -110,38 +156,10 @@ fn solve_level_with_heuristic<H: Heuristic>(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
-fn solve_level(
-    level_num: usize,
-    game: &Game,
-    print_solution_flag: bool,
-    max_nodes_explored: usize,
-    heuristic_type: HeuristicType,
-    search_type: SearchType,
-    freeze_deadlocks: bool,
-    pi_corrals: bool,
-) -> LevelStats {
+fn solve_level(game: &Game, opts: SolveOpts, heuristic_type: HeuristicType) -> LevelStats {
     match heuristic_type {
-        HeuristicType::Greedy => solve_level_with_heuristic(
-            level_num,
-            game,
-            print_solution_flag,
-            max_nodes_explored,
-            GreedyHeuristic::new(game),
-            search_type,
-            freeze_deadlocks,
-            pi_corrals,
-        ),
-        HeuristicType::Null => solve_level_with_heuristic(
-            level_num,
-            game,
-            print_solution_flag,
-            max_nodes_explored,
-            NullHeuristic::new(),
-            search_type,
-            freeze_deadlocks,
-            pi_corrals,
-        ),
+        HeuristicType::Greedy => solve_level_helper(game, opts, GreedyHeuristic::new(game)),
+        HeuristicType::Null => solve_level_helper(game, opts, NullHeuristic::new()),
     }
 }
 
@@ -184,6 +202,10 @@ struct Args {
     /// Disable PI-corral pruning
     #[arg(long, default_value = "false")]
     no_pi_corrals: bool,
+
+    /// Range of move numbers to trace (start, end)
+    #[arg(long, num_args = 2)]
+    trace_range: Option<Vec<usize>>,
 }
 
 fn main() {
@@ -227,24 +249,35 @@ fn main() {
         std::process::exit(1);
     }
 
+    // Validate trace_range
+    if let Some(ref range) = args.trace_range {
+        if range[0] > range[1] {
+            eprintln!("Error: trace range start must be <= end");
+            std::process::exit(1);
+        }
+    }
+
     // Solve each level in the range
     let mut total_solved = 0;
     let mut total_steps = 0;
     let mut total_states = 0;
     let mut total_time_ms = 0;
 
+    // Parse trace_range from Vec to tuple
+    let trace_range = args.trace_range.as_ref().map(|v| (v[0], v[1]));
+
     for level_num in args.level_start..=level_end {
         let game = levels.get(level_num - 1).unwrap();
-        let stats = solve_level(
+        let opts = SolveOpts {
             level_num,
-            game,
-            args.print_solution,
-            args.max_nodes_explored,
-            args.heuristic,
-            args.direction.into(),
-            !args.no_freeze_deadlocks,
-            !args.no_pi_corrals,
-        );
+            max_nodes_explored: args.max_nodes_explored,
+            search_type: args.direction.into(),
+            print_solution: args.print_solution,
+            freeze_deadlocks: !args.no_freeze_deadlocks,
+            pi_corrals: !args.no_pi_corrals,
+            trace_range,
+        };
+        let stats = solve_level(game, opts, args.heuristic);
 
         if stats.solved {
             total_solved += 1;

@@ -37,7 +37,7 @@ struct TableEntry {
 }
 
 /// Performs A* search up to a specified threshold
-struct Searcher<H: Heuristic> {
+struct Searcher<H: Heuristic, T: Tracer> {
     nodes_explored: usize,
     max_nodes_explored: usize,
     table: HashMap<u64, TableEntry>, // Transposition table mapping state hash to entry
@@ -49,6 +49,7 @@ struct Searcher<H: Heuristic> {
     initial_boxes_hash: u64,
     freeze_deadlocks: bool,
     pi_corrals: bool,
+    tracer: Option<Rc<T>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -65,13 +66,25 @@ pub enum SearchType {
 }
 
 /// Manages iterative deepening A* by repeatedly calling Searcher with increasing thresholds
-pub struct Solver<H: Heuristic> {
-    forwards: Searcher<H>,
-    backwards: Searcher<H>,
+pub struct Solver<H: Heuristic, T: Tracer> {
+    forwards: Searcher<H, T>,
+    backwards: Searcher<H, T>,
     search_type: SearchType,
 }
 
-impl<H: Heuristic> Searcher<H> {
+pub trait Tracer {
+    fn trace_move(
+        &self,
+        search_dir: SearchDirection,
+        game: &Game,
+        threshold: usize,
+        f_cost: usize,
+        g_cost: usize,
+        move_: Move,
+    );
+}
+
+impl<H: Heuristic, T: Tracer> Searcher<H, T> {
     fn new(
         zobrist: Rc<Zobrist>,
         max_nodes_explored: usize,
@@ -80,6 +93,7 @@ impl<H: Heuristic> Searcher<H> {
         initial_game: Rc<Game>,
         freeze_deadlocks: bool,
         pi_corrals: bool,
+        tracer: Option<Rc<T>>,
     ) -> Self {
         let initial_hash = zobrist.compute_hash(&initial_game);
         let initial_boxes_hash = zobrist.compute_boxes_hash(&initial_game);
@@ -98,6 +112,7 @@ impl<H: Heuristic> Searcher<H> {
             initial_boxes_hash,
             freeze_deadlocks,
             pi_corrals,
+            tracer,
         };
         searcher.reset();
         searcher
@@ -209,6 +224,10 @@ impl<H: Heuristic> Searcher<H> {
             let old_box_pos = game.box_pos(move_.box_index as usize);
             self.apply_move(game, move_);
             let new_box_pos = game.box_pos(move_.box_index as usize);
+
+            if let Some(tracer) = &self.tracer {
+                tracer.trace_move(self.direction, game, threshold, f_cost, g_cost, move_);
+            }
 
             if self.freeze_deadlocks
                 && Deadlocks::is_freeze_deadlock(game, new_box_pos.0, new_box_pos.1)
@@ -349,7 +368,7 @@ impl<H: Heuristic> Searcher<H> {
     }
 }
 
-impl<H: Heuristic> Solver<H> {
+impl<H: Heuristic, T: Tracer> Solver<H, T> {
     pub fn new(
         max_nodes_explored: usize,
         heuristic: H,
@@ -357,9 +376,11 @@ impl<H: Heuristic> Solver<H> {
         game: &Game,
         freeze_deadlocks: bool,
         pi_corrals: bool,
+        tracer: Option<T>,
     ) -> Self {
         let zobrist = Rc::new(Zobrist::new());
         let heuristic = Rc::new(heuristic);
+        let tracer = tracer.map(|t| Rc::new(t));
         let forwards_game = Rc::new(game.clone());
         let backwards_game = Rc::new(game.make_goal_state());
 
@@ -372,6 +393,7 @@ impl<H: Heuristic> Solver<H> {
                 forwards_game,
                 freeze_deadlocks,
                 pi_corrals,
+                tracer.clone(),
             ),
             backwards: Searcher::new(
                 zobrist,
@@ -381,6 +403,7 @@ impl<H: Heuristic> Solver<H> {
                 backwards_game,
                 freeze_deadlocks,
                 pi_corrals,
+                tracer,
             ),
             search_type,
         }
@@ -497,6 +520,8 @@ impl<H: Heuristic> Solver<H> {
 
 #[cfg(test)]
 mod tests {
+    use crate::heuristic::GreedyHeuristic;
+
     use super::*;
 
     #[test]
@@ -505,9 +530,7 @@ mod tests {
                      #@$.#\n\
                      ####";
         let game = Game::from_text(input).unwrap();
-
-        let heuristic = crate::heuristic::GreedyHeuristic::new(&game);
-        let mut solver = Solver::new(5000000, heuristic, SearchType::Forwards, &game, true, true);
+        let mut solver = new_solver(&game);
         let result = solver.solve();
 
         assert!(matches!(result, SolveResult::Solved(_)));
@@ -529,9 +552,7 @@ mod tests {
                      #@*#\n\
                      ####";
         let game = Game::from_text(input).unwrap();
-
-        let heuristic = crate::heuristic::GreedyHeuristic::new(&game);
-        let mut solver = Solver::new(5000000, heuristic, SearchType::Forwards, &game, true, true);
+        let mut solver = new_solver(&game);
         let result = solver.solve();
 
         assert!(matches!(result, SolveResult::Solved(_)));
@@ -546,9 +567,7 @@ mod tests {
                      #@$ .#\n\
                      #####";
         let game = Game::from_text(input).unwrap();
-
-        let heuristic = crate::heuristic::GreedyHeuristic::new(&game);
-        let mut solver = Solver::new(5000000, heuristic, SearchType::Forwards, &game, true, true);
+        let mut solver = new_solver(&game);
         let result = solver.solve();
 
         assert!(matches!(result, SolveResult::Solved(_)));
@@ -570,10 +589,36 @@ mod tests {
                      #@$#.#\n\
                      #####";
         let game = Game::from_text(input).unwrap();
-
-        let heuristic = crate::heuristic::GreedyHeuristic::new(&game);
-        let mut solver = Solver::new(5000000, heuristic, SearchType::Forwards, &game, true, true);
+        let mut solver = new_solver(&game);
         let result = solver.solve();
         assert_eq!(result, SolveResult::Impossible);
+    }
+
+    struct NullTracer {}
+
+    impl Tracer for NullTracer {
+        fn trace_move(
+            &self,
+            _search_dir: SearchDirection,
+            _game: &Game,
+            _threshold: usize,
+            _f_cost: usize,
+            _g_cost: usize,
+            _move: Move,
+        ) {
+            unreachable!()
+        }
+    }
+
+    fn new_solver(game: &Game) -> Solver<GreedyHeuristic, NullTracer> {
+        Solver::new(
+            5000000,
+            GreedyHeuristic::new(game),
+            SearchType::Forwards,
+            game,
+            true,
+            true,
+            None,
+        )
     }
 }
