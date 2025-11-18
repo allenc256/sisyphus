@@ -8,7 +8,7 @@ mod zobrist;
 
 use clap::{Parser, ValueEnum};
 use game::{Game, MoveByPos};
-use heuristic::{GreedyHeuristic, Heuristic, NullHeuristic};
+use heuristic::{GreedyHeuristic, Heuristic, NullHeuristic, SimpleHeuristic};
 use levels::Levels;
 use solver::{SearchType, SolveResult, Solver};
 use std::{cell::Cell, time::Instant};
@@ -18,6 +18,7 @@ use crate::solver::{SearchDirection, Tracer};
 #[derive(Debug, Clone, Copy, ValueEnum)]
 enum HeuristicType {
     Greedy,
+    Simple,
     Null,
 }
 
@@ -159,6 +160,7 @@ fn solve_level_helper<H: Heuristic>(game: &Game, opts: SolveOpts, heuristic: H) 
 fn solve_level(game: &Game, opts: SolveOpts, heuristic_type: HeuristicType) -> LevelStats {
     match heuristic_type {
         HeuristicType::Greedy => solve_level_helper(game, opts, GreedyHeuristic::new(game)),
+        HeuristicType::Simple => solve_level_helper(game, opts, SimpleHeuristic::new(game)),
         HeuristicType::Null => solve_level_helper(game, opts, NullHeuristic::new()),
     }
 }
