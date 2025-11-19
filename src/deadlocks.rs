@@ -1,5 +1,3 @@
-use std::marker::PhantomData;
-
 use crate::bits::LazyBitboard;
 use crate::game::{Direction, Game, GameType, Tile};
 
@@ -12,27 +10,25 @@ impl Deadlocks {
     }
 }
 
-struct Frozen<T: GameType> {
+struct Frozen {
     visited: LazyBitboard,
     deadlocked: bool,
-    game_type: PhantomData<T>,
 }
 
-impl<T: GameType> Frozen<T> {
+impl Frozen {
     fn new() -> Self {
         Self {
             visited: LazyBitboard::new(),
             deadlocked: false,
-            game_type: PhantomData,
         }
     }
 
-    fn is_deadlocked(&mut self, game: &Game<T>, x: u8, y: u8) -> bool {
+    fn is_deadlocked<T: GameType>(&mut self, game: &Game<T>, x: u8, y: u8) -> bool {
         assert!(game.box_at(x, y).is_some());
         self.is_frozen(game, x, y) && self.deadlocked
     }
 
-    fn is_frozen(&mut self, game: &Game<T>, x: u8, y: u8) -> bool {
+    fn is_frozen<T: GameType>(&mut self, game: &Game<T>, x: u8, y: u8) -> bool {
         if game.get_tile(x, y) == Tile::Wall {
             return true;
         }
@@ -53,7 +49,7 @@ impl<T: GameType> Frozen<T> {
         is_frozen_box
     }
 
-    fn is_frozen_dir(&mut self, game: &Game<T>, x: u8, y: u8, dir: Direction) -> bool {
+    fn is_frozen_dir<T: GameType>(&mut self, game: &Game<T>, x: u8, y: u8, dir: Direction) -> bool {
         if let Some((nx, ny)) = game.push_pos(x, y, dir) {
             self.is_frozen(game, nx, ny)
         } else {

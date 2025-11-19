@@ -15,7 +15,7 @@ use std::{cell::Cell, time::Instant};
 
 use crate::{
     game::{Forward, GameType},
-    solver::{SearchDirection, Tracer},
+    solver::Tracer,
 };
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
@@ -34,20 +34,20 @@ enum Direction {
 impl From<Direction> for SearchType {
     fn from(dir: Direction) -> Self {
         match dir {
-            Direction::Forwards => SearchType::Forwards,
-            Direction::Backwards => SearchType::Backwards,
+            Direction::Forwards => SearchType::Forward,
+            Direction::Backwards => SearchType::Reverse,
             Direction::Bidirectional => SearchType::Bidirectional,
         }
     }
 }
 
-fn print_solution(game: &Game<Forward>, solution: &[MoveByPos]) {
+fn print_solution(game: &Game<Forward>, solution: &[MoveByPos<Forward>]) {
     println!("\nStarting position:\n{}", game);
     let mut game = game.clone();
     let mut count = 0;
     let total = solution.len();
     for push in solution {
-        game.push_by_pos(*push);
+        game.push_by_pos(push.box_pos.0, push.box_pos.1, push.direction);
         count += 1;
         println!(
             "Push crate ({}, {}) {} ({}/{}):\n{}",
@@ -75,19 +75,23 @@ impl VerboseTracer {
 impl Tracer for VerboseTracer {
     fn trace_move<T: GameType>(
         &self,
-        search_dir: SearchDirection,
         game: &Game<T>,
         threshold: usize,
         f_cost: usize,
         g_cost: usize,
-        _move: game::Move,
+        _move: game::Move<T>,
     ) {
         let new_count = self.trace_count.get() + 1;
         self.trace_count.set(new_count);
         if self.trace_start <= new_count && new_count <= self.trace_end {
             println!(
                 "{:?} search for move {} (f_cost={}, g_cost={}, threshold={}):\n{}",
-                search_dir, new_count, f_cost, g_cost, threshold, game
+                game.game_type(),
+                new_count,
+                f_cost,
+                g_cost,
+                threshold,
+                game
             );
         }
     }
