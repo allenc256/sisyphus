@@ -1,6 +1,6 @@
 use crate::bits::{Bitvector, BitvectorIter, LazyBitboard};
 use arrayvec::ArrayVec;
-use std::fmt;
+use std::{fmt, marker::PhantomData};
 
 pub const MAX_SIZE: usize = 64;
 pub const MAX_BOXES: usize = 64;
@@ -241,7 +241,7 @@ impl Boxes {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Game {
+pub struct Game<T: GameType> {
     tiles: [[Tile; MAX_SIZE]; MAX_SIZE],
     player: PlayerPos,
     empty_goals: u8,
@@ -249,114 +249,20 @@ pub struct Game {
     height: u8,
     boxes: Boxes,
     goals: Goals,
+    type_: PhantomData<T>,
 }
 
-impl Game {
-    /// Parse a Sokoban board from text format.
-    ///
-    /// Characters:
-    /// - `#` = Wall
-    /// - ` ` = Floor (empty space)
-    /// - `.` = Goal (target location for boxes)
-    /// - `$` = Box
-    /// - `@` = Player
-    /// - `*` = Box on goal
-    /// - `+` = Player on goal
-    pub fn from_text(text: &str) -> Result<Self, String> {
-        let lines: Vec<&str> = text.lines().collect();
+pub trait GameType: Clone + Copy + PartialEq + Eq {}
 
-        if lines.is_empty() {
-            return Err("Empty board".to_string());
-        }
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Forward {}
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Reverse {}
 
-        let height = lines.len();
-        let width = lines.iter().map(|line| line.len()).max().unwrap_or(0);
+impl GameType for Forward {}
+impl GameType for Reverse {}
 
-        if width > MAX_SIZE {
-            return Err(format!(
-                "Board width {} exceeds maximum size {}",
-                width, MAX_SIZE
-            ));
-        }
-        if height > MAX_SIZE {
-            return Err(format!(
-                "Board height {} exceeds maximum size {}",
-                height, MAX_SIZE
-            ));
-        }
-
-        let mut tiles = [[Tile::Floor; MAX_SIZE]; MAX_SIZE];
-        let mut player_pos = None;
-        let mut boxes = Boxes::new();
-        let mut goals = Goals::new();
-        let mut empty_goals: u8 = 0;
-
-        for (y, line) in lines.iter().enumerate() {
-            for (x, ch) in line.chars().enumerate() {
-                match ch {
-                    '#' => tiles[y][x] = Tile::Wall,
-                    ' ' => tiles[y][x] = Tile::Floor,
-                    '.' => {
-                        tiles[y][x] = Tile::Goal;
-                        goals.add(x as u8, y as u8);
-                        empty_goals += 1;
-                    }
-                    '$' => {
-                        tiles[y][x] = Tile::Floor;
-                        boxes.add(x as u8, y as u8);
-                    }
-                    '*' => {
-                        tiles[y][x] = Tile::Goal;
-                        goals.add(x as u8, y as u8);
-                        boxes.add(x as u8, y as u8);
-                    }
-                    '@' => {
-                        tiles[y][x] = Tile::Floor;
-                        if player_pos.is_some() {
-                            return Err("Multiple players found".to_string());
-                        }
-                        player_pos = Some(PlayerPos::Known(x as u8, y as u8));
-                    }
-                    '+' => {
-                        tiles[y][x] = Tile::Goal;
-                        if player_pos.is_some() {
-                            return Err("Multiple players found".to_string());
-                        }
-                        player_pos = Some(PlayerPos::Known(x as u8, y as u8));
-                        goals.add(x as u8, y as u8);
-                        empty_goals += 1;
-                    }
-                    _ => {
-                        return Err(format!(
-                            "Invalid character '{}' at position ({}, {})",
-                            ch, x, y
-                        ));
-                    }
-                }
-            }
-        }
-
-        let player_pos = player_pos.ok_or("No player found on board")?;
-
-        // Validate that the number of goals matches the number of boxes
-        if goals.count != boxes.count {
-            return Err(format!(
-                "Goal count ({}) does not match box count ({})",
-                goals.count, boxes.count
-            ));
-        }
-
-        Ok(Game {
-            tiles,
-            player: player_pos,
-            empty_goals,
-            width: width as u8,
-            height: height as u8,
-            boxes,
-            goals,
-        })
-    }
-
+impl<T: GameType> Game<T> {
     pub fn get_tile(&self, x: u8, y: u8) -> Tile {
         self.tiles[y as usize][x as usize]
     }
@@ -507,36 +413,6 @@ impl Game {
     /// Check if all boxes are on goals (win condition)
     pub fn is_solved(&self) -> bool {
         self.empty_goals == 0
-    }
-
-    /// Make a game state  in the solved position where all boxes are on goals
-    /// and the player position is unknown. This is useful for backward search.
-    pub fn make_goal_state(&self) -> Self {
-        let mut game = self.clone();
-
-        // Move all boxes to their corresponding goals
-        // Do this in two passes to avoid clobbering unprocessed boxes
-
-        // First pass: clear all current positions in index
-        for i in 0..game.boxes.count as usize {
-            let current_pos = game.boxes.positions[i];
-            game.boxes.index[current_pos.1 as usize][current_pos.0 as usize] = 255;
-        }
-
-        // Second pass: set all new positions
-        for i in 0..game.boxes.count as usize {
-            let goal_pos = game.goals.positions[i];
-            game.boxes.positions[i] = goal_pos;
-            game.boxes.index[goal_pos.1 as usize][goal_pos.0 as usize] = i as u8;
-        }
-
-        // Set empty_goals to 0 since all boxes are on goals
-        game.empty_goals = 0;
-
-        // Set player position to unknown
-        game.player = PlayerPos::Unknown;
-
-        game
     }
 
     /// Compute the canonical (lexicographically smallest reachable) player position.
@@ -833,7 +709,7 @@ impl Game {
     }
 }
 
-impl fmt::Display for Game {
+impl<T: GameType> fmt::Display for Game<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         for y in 0..self.height {
             let mut line = String::new();
@@ -867,6 +743,174 @@ impl fmt::Display for Game {
             writeln!(f, "{}", line.trim_end())?;
         }
         Ok(())
+    }
+}
+
+impl Game<Forward> {
+    /// Parse a Sokoban board from text format.
+    ///
+    /// Characters:
+    /// - `#` = Wall
+    /// - ` ` = Floor (empty space)
+    /// - `.` = Goal (target location for boxes)
+    /// - `$` = Box
+    /// - `@` = Player
+    /// - `*` = Box on goal
+    /// - `+` = Player on goal
+    pub fn from_text(text: &str) -> Result<Self, String> {
+        let lines: Vec<&str> = text.lines().collect();
+
+        if lines.is_empty() {
+            return Err("Empty board".to_string());
+        }
+
+        let height = lines.len();
+        let width = lines.iter().map(|line| line.len()).max().unwrap_or(0);
+
+        if width > MAX_SIZE {
+            return Err(format!(
+                "Board width {} exceeds maximum size {}",
+                width, MAX_SIZE
+            ));
+        }
+        if height > MAX_SIZE {
+            return Err(format!(
+                "Board height {} exceeds maximum size {}",
+                height, MAX_SIZE
+            ));
+        }
+
+        let mut tiles = [[Tile::Floor; MAX_SIZE]; MAX_SIZE];
+        let mut player_pos = None;
+        let mut boxes = Boxes::new();
+        let mut goals = Goals::new();
+        let mut empty_goals: u8 = 0;
+
+        for (y, line) in lines.iter().enumerate() {
+            for (x, ch) in line.chars().enumerate() {
+                match ch {
+                    '#' => tiles[y][x] = Tile::Wall,
+                    ' ' => tiles[y][x] = Tile::Floor,
+                    '.' => {
+                        tiles[y][x] = Tile::Goal;
+                        goals.add(x as u8, y as u8);
+                        empty_goals += 1;
+                    }
+                    '$' => {
+                        tiles[y][x] = Tile::Floor;
+                        boxes.add(x as u8, y as u8);
+                    }
+                    '*' => {
+                        tiles[y][x] = Tile::Goal;
+                        goals.add(x as u8, y as u8);
+                        boxes.add(x as u8, y as u8);
+                    }
+                    '@' => {
+                        tiles[y][x] = Tile::Floor;
+                        if player_pos.is_some() {
+                            return Err("Multiple players found".to_string());
+                        }
+                        player_pos = Some(PlayerPos::Known(x as u8, y as u8));
+                    }
+                    '+' => {
+                        tiles[y][x] = Tile::Goal;
+                        if player_pos.is_some() {
+                            return Err("Multiple players found".to_string());
+                        }
+                        player_pos = Some(PlayerPos::Known(x as u8, y as u8));
+                        goals.add(x as u8, y as u8);
+                        empty_goals += 1;
+                    }
+                    _ => {
+                        return Err(format!(
+                            "Invalid character '{}' at position ({}, {})",
+                            ch, x, y
+                        ));
+                    }
+                }
+            }
+        }
+
+        let player_pos = player_pos.ok_or("No player found on board")?;
+
+        // Validate that the number of goals matches the number of boxes
+        if goals.count != boxes.count {
+            return Err(format!(
+                "Goal count ({}) does not match box count ({})",
+                goals.count, boxes.count
+            ));
+        }
+
+        Ok(Game {
+            tiles,
+            player: player_pos,
+            empty_goals,
+            width: width as u8,
+            height: height as u8,
+            boxes,
+            goals,
+            type_: PhantomData,
+        })
+    }
+
+    /// Make a game state  in the solved position where all boxes are on goals
+    /// and the player position is unknown. This is useful for backward search.
+    pub fn make_goal_state(&self) -> Game<Reverse> {
+        let mut game = self.clone();
+
+        // Move all boxes to their corresponding goals
+        // Do this in two passes to avoid clobbering unprocessed boxes
+
+        // First pass: clear all current positions in index
+        for i in 0..game.boxes.count as usize {
+            let current_pos = game.boxes.positions[i];
+            game.boxes.index[current_pos.1 as usize][current_pos.0 as usize] = 255;
+        }
+
+        // Second pass: set all new positions
+        for i in 0..game.boxes.count as usize {
+            let goal_pos = game.goals.positions[i];
+            game.boxes.positions[i] = goal_pos;
+            game.boxes.index[goal_pos.1 as usize][goal_pos.0 as usize] = i as u8;
+        }
+
+        // Set empty_goals to 0 since all boxes are on goals
+        game.empty_goals = 0;
+
+        // Set player position to unknown
+        game.player = PlayerPos::Unknown;
+
+        (&game).into()
+    }
+}
+
+impl From<&Game<Reverse>> for Game<Forward> {
+    fn from(game: &Game<Reverse>) -> Self {
+        Game {
+            tiles: game.tiles,
+            player: game.player,
+            empty_goals: game.empty_goals,
+            width: game.width,
+            height: game.height,
+            boxes: game.boxes.clone(),
+            goals: game.goals.clone(),
+            type_: PhantomData,
+        }
+    }
+}
+
+impl From<&Game<Forward>> for Game<Reverse> {
+    fn from(game: &Game<Forward>) -> Self {
+        Game {
+            tiles: game.tiles,
+            player: game.player,
+            empty_goals: game.empty_goals,
+            width: game.width,
+            height: game.height,
+            boxes: game.boxes.clone(),
+            goals: game.goals.clone(),
+            type_: PhantomData,
+        }
     }
 }
 
@@ -1523,11 +1567,16 @@ mod tests {
         check_pi_corral(&game, 8, 7, Some((corral2_moves, corral2_size)));
     }
 
-    fn parse_game(text: &str) -> Game {
+    fn parse_game(text: &str) -> Game<Forward> {
         Game::from_text(text.trim_matches('\n')).unwrap()
     }
 
-    fn check_pi_corral(game: &Game, x: u8, y: u8, expected_result: Option<(Moves, usize)>) {
+    fn check_pi_corral(
+        game: &Game<Forward>,
+        x: u8,
+        y: u8,
+        expected_result: Option<(Moves, usize)>,
+    ) {
         let mut player_reachable = LazyBitboard::new();
         let mut player_reachable_boxes: Bitvector = Bitvector::new();
         let mut corrals_visited = LazyBitboard::new();

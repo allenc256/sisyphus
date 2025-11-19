@@ -1,4 +1,4 @@
-use crate::game::{ALL_DIRECTIONS, Game, MAX_BOXES, MAX_SIZE, Tile};
+use crate::game::{ALL_DIRECTIONS, Game, GameType, MAX_BOXES, MAX_SIZE, Tile};
 use std::collections::VecDeque;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -10,10 +10,10 @@ pub enum Cost {
 /// Trait for computing heuristics that estimate the number of pushes needed to solve a game.
 pub trait Heuristic {
     /// Compute estimated number of pushes needed to complete the game from the current state.
-    fn compute_forward(&self, game: &Game) -> Cost;
+    fn compute_forward<T: GameType>(&self, game: &Game<T>) -> Cost;
 
     /// Compute estimated number of pushes needed to get to the current state from the initial state.
-    fn compute_backward(&self, game: &Game) -> Cost;
+    fn compute_backward<T: GameType>(&self, game: &Game<T>) -> Cost;
 }
 
 pub struct NullHeuristic;
@@ -25,11 +25,11 @@ impl NullHeuristic {
 }
 
 impl Heuristic for NullHeuristic {
-    fn compute_forward(&self, _game: &Game) -> Cost {
+    fn compute_forward<T: GameType>(&self, _game: &Game<T>) -> Cost {
         Cost::Solvable(0)
     }
 
-    fn compute_backward(&self, _game: &Game) -> Cost {
+    fn compute_backward<T: GameType>(&self, _game: &Game<T>) -> Cost {
         Cost::Solvable(0)
     }
 }
@@ -44,7 +44,7 @@ pub struct GreedyHeuristic {
 
 #[allow(clippy::needless_range_loop)]
 impl GreedyHeuristic {
-    pub fn new(game: &Game) -> Self {
+    pub fn new<T: GameType>(game: &Game<T>) -> Self {
         let goal_distances = Box::new(Self::compute_distances_from_goals(game));
         let start_distances = Box::new(Self::compute_distances_from_starts(game));
         GreedyHeuristic {
@@ -54,7 +54,9 @@ impl GreedyHeuristic {
     }
 
     /// Compute push distances from each goal to all positions using BFS with pulls
-    fn compute_distances_from_goals(game: &Game) -> [[[u16; MAX_SIZE]; MAX_SIZE]; MAX_BOXES] {
+    fn compute_distances_from_goals<T: GameType>(
+        game: &Game<T>,
+    ) -> [[[u16; MAX_SIZE]; MAX_SIZE]; MAX_BOXES] {
         let mut distances = [[[u16::MAX; MAX_SIZE]; MAX_SIZE]; MAX_BOXES];
 
         for goal_idx in 0..game.box_count() {
@@ -65,7 +67,9 @@ impl GreedyHeuristic {
     }
 
     /// Compute pull distances from each start position to all positions using BFS with pushes
-    fn compute_distances_from_starts(game: &Game) -> [[[u16; MAX_SIZE]; MAX_SIZE]; MAX_BOXES] {
+    fn compute_distances_from_starts<T: GameType>(
+        game: &Game<T>,
+    ) -> [[[u16; MAX_SIZE]; MAX_SIZE]; MAX_BOXES] {
         let mut distances = [[[u16::MAX; MAX_SIZE]; MAX_SIZE]; MAX_BOXES];
 
         for box_idx in 0..game.box_count() {
@@ -76,7 +80,11 @@ impl GreedyHeuristic {
     }
 
     /// BFS using pulls to compute distances from a goal position
-    fn bfs_pulls(game: &Game, goal_idx: usize, distances: &mut [[u16; MAX_SIZE]; MAX_SIZE]) {
+    fn bfs_pulls<T: GameType>(
+        game: &Game<T>,
+        goal_idx: usize,
+        distances: &mut [[u16; MAX_SIZE]; MAX_SIZE],
+    ) {
         let start_pos = game.goal_pos(goal_idx);
         let mut queue = VecDeque::new();
         queue.push_back((start_pos.0, start_pos.1));
@@ -107,7 +115,11 @@ impl GreedyHeuristic {
     }
 
     /// BFS using pushes to compute distances from a box start position
-    fn bfs_pushes(game: &Game, box_idx: usize, distances: &mut [[u16; MAX_SIZE]; MAX_SIZE]) {
+    fn bfs_pushes<T: GameType>(
+        game: &Game<T>,
+        box_idx: usize,
+        distances: &mut [[u16; MAX_SIZE]; MAX_SIZE],
+    ) {
         let start_pos = game.box_start_pos(box_idx);
         let mut queue = VecDeque::new();
         queue.push_back((start_pos.0, start_pos.1));
@@ -135,7 +147,10 @@ impl GreedyHeuristic {
         }
     }
 
-    fn greedy_distance(game: &Game, distances: &[[[u16; MAX_SIZE]; MAX_SIZE]; MAX_BOXES]) -> Cost {
+    fn greedy_distance<T: GameType>(
+        game: &Game<T>,
+        distances: &[[[u16; MAX_SIZE]; MAX_SIZE]; MAX_BOXES],
+    ) -> Cost {
         // Compute two distances:
         //   box_to_dst_total: total distance from each box to its nearest destination.
         //   dst_to_box_total: total distance from each destination to its nearest box.
@@ -178,11 +193,11 @@ impl GreedyHeuristic {
 }
 
 impl Heuristic for GreedyHeuristic {
-    fn compute_forward(&self, game: &Game) -> Cost {
+    fn compute_forward<T: GameType>(&self, game: &Game<T>) -> Cost {
         Self::greedy_distance(game, &self.goal_distances)
     }
 
-    fn compute_backward(&self, game: &Game) -> Cost {
+    fn compute_backward<T: GameType>(&self, game: &Game<T>) -> Cost {
         Self::greedy_distance(game, &self.start_distances)
     }
 }

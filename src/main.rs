@@ -13,7 +13,10 @@ use levels::Levels;
 use solver::{SearchType, SolveResult, Solver};
 use std::{cell::Cell, time::Instant};
 
-use crate::solver::{SearchDirection, Tracer};
+use crate::{
+    game::{Forward, GameType},
+    solver::{SearchDirection, Tracer},
+};
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
 enum HeuristicType {
@@ -38,7 +41,7 @@ impl From<Direction> for SearchType {
     }
 }
 
-fn print_solution(game: &Game, solution: &[MoveByPos]) {
+fn print_solution(game: &Game<Forward>, solution: &[MoveByPos]) {
     println!("\nStarting position:\n{}", game);
     let mut game = game.clone();
     let mut count = 0;
@@ -70,10 +73,10 @@ impl VerboseTracer {
 }
 
 impl Tracer for VerboseTracer {
-    fn trace_move(
+    fn trace_move<T: GameType>(
         &self,
         search_dir: SearchDirection,
-        game: &Game,
+        game: &Game<T>,
         threshold: usize,
         f_cost: usize,
         g_cost: usize,
@@ -107,7 +110,11 @@ struct SolveOpts {
     trace_range: Option<(usize, usize)>,
 }
 
-fn solve_level_helper<H: Heuristic>(game: &Game, opts: SolveOpts, heuristic: H) -> LevelStats {
+fn solve_level_helper<H: Heuristic>(
+    game: &Game<Forward>,
+    opts: SolveOpts,
+    heuristic: H,
+) -> LevelStats {
     let tracer: Option<VerboseTracer> = if let Some((trace_start, trace_end)) = opts.trace_range {
         Some(VerboseTracer::new(trace_start, trace_end))
     } else {
@@ -156,7 +163,7 @@ fn solve_level_helper<H: Heuristic>(game: &Game, opts: SolveOpts, heuristic: H) 
     }
 }
 
-fn solve_level(game: &Game, opts: SolveOpts, heuristic_type: HeuristicType) -> LevelStats {
+fn solve_level(game: &Game<Forward>, opts: SolveOpts, heuristic_type: HeuristicType) -> LevelStats {
     match heuristic_type {
         HeuristicType::Greedy => solve_level_helper(game, opts, GreedyHeuristic::new(game)),
         HeuristicType::Null => solve_level_helper(game, opts, NullHeuristic::new()),

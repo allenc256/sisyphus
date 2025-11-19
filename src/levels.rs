@@ -1,3 +1,4 @@
+use crate::game::Forward;
 use crate::game::Game;
 use std::fmt;
 use std::fs;
@@ -36,7 +37,7 @@ impl From<String> for LevelError {
 /// A collection of Sokoban levels in XSB format.
 #[derive(Debug)]
 pub struct Levels {
-    levels: Vec<Game>,
+    levels: Vec<Game<Forward>>,
 }
 
 impl Levels {
@@ -102,7 +103,7 @@ impl Levels {
     }
 
     /// Get the nth level (0-indexed).
-    pub fn get(&self, index: usize) -> Option<&Game> {
+    pub fn get(&self, index: usize) -> Option<&Game<Forward>> {
         self.levels.get(index)
     }
 
