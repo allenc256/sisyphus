@@ -43,6 +43,15 @@ impl Direction {
         }
     }
 
+    pub fn reverse(&self) -> Direction {
+        match self {
+            Direction::Up => Direction::Down,
+            Direction::Down => Direction::Up,
+            Direction::Left => Direction::Right,
+            Direction::Right => Direction::Left,
+        }
+    }
+
     fn index(&self) -> usize {
         match self {
             Direction::Up => 0,
@@ -76,16 +85,69 @@ impl fmt::Display for Direction {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Move<T: GameType> {
-    pub box_index: u8,
-    pub direction: Direction,
-    pub game_type: T,
+    box_index: u8,
+    direction: Direction,
+    game_type: T,
+}
+
+impl<T: GameType> Move<T> {
+    pub fn new(box_index: u8, direction: Direction) -> Self {
+        Self {
+            box_index,
+            direction,
+            game_type: T::default(),
+        }
+    }
+
+    pub fn box_index(&self) -> u8 {
+        self.box_index
+    }
+
+    pub fn direction(&self) -> Direction {
+        self.direction
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MoveByPos<T: GameType> {
-    pub box_pos: (u8, u8),
-    pub direction: Direction,
-    pub game_type: T,
+    box_x: u8,
+    box_y: u8,
+    direction: Direction,
+    game_type: T,
+}
+
+impl<T: GameType> MoveByPos<T> {
+    pub fn new(box_x: u8, box_y: u8, direction: Direction) -> Self {
+        Self {
+            box_x,
+            box_y,
+            direction,
+            game_type: T::default(),
+        }
+    }
+
+    pub fn box_x(&self) -> u8 {
+        self.box_x
+    }
+
+    pub fn box_y(&self) -> u8 {
+        self.box_y
+    }
+
+    pub fn direction(&self) -> Direction {
+        self.direction
+    }
+}
+
+impl From<&MoveByPos<Reverse>> for MoveByPos<Forward> {
+    fn from(move_by_pos: &MoveByPos<Reverse>) -> Self {
+        Self {
+            box_x: move_by_pos.box_x,
+            box_y: move_by_pos.box_y,
+            direction: move_by_pos.direction.reverse(),
+            game_type: Forward,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -137,6 +199,28 @@ impl<T: GameType> Moves<T> {
             game_type: PhantomData,
         }
     }
+}
+
+impl From<Moves<Reverse>> for Moves<Forward> {
+    fn from(moves: Moves<Reverse>) -> Self {
+        Moves {
+            bits: swizzle(moves.bits),
+            game_type: Forward,
+        }
+    }
+}
+
+impl From<Moves<Forward>> for Moves<Reverse> {
+    fn from(moves: Moves<Forward>) -> Self {
+        Moves {
+            bits: swizzle(moves.bits),
+            game_type: Reverse,
+        }
+    }
+}
+
+fn swizzle(bits: [Bitvector; 4]) -> [Bitvector; 4] {
+    [bits[1], bits[0], bits[3], bits[2]]
 }
 
 pub struct MovesIter<T: GameType> {
@@ -306,7 +390,7 @@ impl<T: GameType> Game<T> {
 
     /// Move from position (x, y) in the given direction.
     /// Returns Some((new_x, new_y)) if the new position is within bounds, None otherwise.
-    pub fn push_pos(&self, x: u8, y: u8, dir: Direction) -> Option<(u8, u8)> {
+    pub fn move_pos(&self, x: u8, y: u8, dir: Direction) -> Option<(u8, u8)> {
         let (dx, dy) = dir.delta();
         let new_x = x as i32 + dx as i32;
         let new_y = y as i32 + dy as i32;
@@ -318,68 +402,23 @@ impl<T: GameType> Game<T> {
         }
     }
 
-    /// Move from position (x, y) in the opposite direction of dir.
-    /// Returns Some((new_x, new_y)) if the new position is within bounds, None otherwise.
-    pub fn pull_pos(&self, x: u8, y: u8, dir: Direction) -> Option<(u8, u8)> {
-        let (dx, dy) = dir.delta();
-        let new_x = x as i32 - dx as i32;
-        let new_y = y as i32 - dy as i32;
-
-        if new_x >= 0 && new_y >= 0 && new_x < self.width as i32 && new_y < self.height as i32 {
-            Some((new_x as u8, new_y as u8))
-        } else {
-            None
-        }
-    }
-
-    /// Pushes a box.
+    /// Pushes a box by box index.
     /// Updates the player position to where the box was.
-    /// Panics if the push is invalid (invalid box index, destination blocked, etc.)
     pub fn push(&mut self, box_index: u8, direction: Direction) {
         assert!(
             (box_index as usize) < self.boxes.count as usize,
             "Invalid box index: {}",
             box_index
         );
-
         let (x, y) = self.boxes.positions[box_index as usize];
-        let (new_x, new_y) = self
-            .push_pos(x, y, direction)
-            .expect("Push destination out of bounds");
-
-        let dest_tile = self.get_tile(new_x, new_y);
-        assert!(
-            !self.boxes.has_box_at(new_x, new_y)
-                && (dest_tile == Tile::Floor || dest_tile == Tile::Goal),
-            "Cannot push box to ({}, {}): destination blocked",
-            new_x,
-            new_y
-        );
-
-        let source_tile = self.get_tile(x, y);
-        let dest_is_goal = dest_tile == Tile::Goal;
-
-        // Update empty_goals count
-        if source_tile == Tile::Goal {
-            self.empty_goals += 1;
-        }
-        if dest_is_goal {
-            self.empty_goals -= 1;
-        }
-
-        // Update box position
-        self.boxes.move_box(x, y, new_x, new_y);
-
-        // Update player position to where the box was
-        self.player = PlayerPos::Known(x, y);
+        self.push_by_pos(x, y, direction);
     }
 
+    /// Pushes a box by box position.
+    /// Updates the player position to where the box was.
     pub fn push_by_pos(&mut self, x: u8, y: u8, direction: Direction) {
-        let box_index = self
-            .box_at(x, y)
-            .unwrap_or_else(|| panic!("No box at position ({}, {})", x, y));
-
-        self.push(box_index, direction);
+        self.move_box(x, y, direction);
+        self.player = PlayerPos::Known(x, y);
     }
 
     pub fn pull(&mut self, box_index: u8, direction: Direction) {
@@ -389,35 +428,36 @@ impl<T: GameType> Game<T> {
             box_index
         );
 
-        // Current box position (after the push we're undoing)
-        let (new_x, new_y) = self.boxes.positions[box_index as usize];
+        // Update box position
+        let (x, y) = self.boxes.positions[box_index as usize];
+        let (old_x, old_y) = self.move_box(x, y, direction);
 
-        // Calculate where box came from (opposite direction)
-        let (old_x, old_y) = self
-            .pull_pos(new_x, new_y, direction)
-            .expect("Pull source out of bounds");
-
-        // Calculate where player was before the push
+        // Update player position
         let (player_old_x, player_old_y) = self
-            .pull_pos(old_x, old_y, direction)
+            .move_pos(old_x, old_y, direction)
             .expect("Pull player position out of bounds");
+        self.player = PlayerPos::Known(player_old_x, player_old_y);
+    }
 
-        let current_tile = self.get_tile(new_x, new_y);
-        let old_tile = self.get_tile(old_x, old_y);
+    fn move_box(&mut self, x: u8, y: u8, direction: Direction) -> (u8, u8) {
+        let (new_x, new_y) = self
+            .move_pos(x, y, direction)
+            .expect("Push destination out of bounds");
+
+        assert!(!self.is_blocked(new_x, new_y), "destination blocked");
 
         // Update empty_goals count
-        if current_tile == Tile::Goal {
-            self.empty_goals += 1; // Removing box from goal
+        if self.get_tile(x, y) == Tile::Goal {
+            self.empty_goals += 1;
         }
-        if old_tile == Tile::Goal {
-            self.empty_goals -= 1; // Placing box on goal
+        if self.get_tile(new_x, new_y) == Tile::Goal {
+            self.empty_goals -= 1;
         }
 
-        // Move box back
-        self.boxes.move_box(new_x, new_y, old_x, old_y);
+        // Update box position
+        self.boxes.move_box(x, y, new_x, new_y);
 
-        // Restore player position
-        self.player = PlayerPos::Known(player_old_x, player_old_y);
+        (new_x, new_y)
     }
 
     /// Check if all boxes are on goals (win condition)
@@ -470,7 +510,7 @@ impl<T: GameType> Game<T> {
         let canonical_pos = self.player_dfs((x, y), visited, |_player_pos, dir, box_idx| {
             boxes.add(box_idx);
             let box_pos = self.box_pos(box_idx as usize);
-            if let Some((dest_x, dest_y)) = self.push_pos(box_pos.0, box_pos.1, dir) {
+            if let Some((dest_x, dest_y)) = self.move_pos(box_pos.0, box_pos.1, dir) {
                 if !self.is_blocked(dest_x, dest_y) {
                     pushes.add(box_idx, dir);
                 }
@@ -495,7 +535,7 @@ impl<T: GameType> Game<T> {
         // of a player push full the "P" condition of a PI-corral).
         for push in pushes.iter() {
             let (bx, by) = self.box_pos(push.box_index as usize);
-            let Some((nx, ny)) = self.push_pos(bx, by, push.direction) else {
+            let Some((nx, ny)) = self.move_pos(bx, by, push.direction) else {
                 panic!("Invalid push");
             };
             if !player_reachable.get(nx, ny) && !corrals_visited.get(nx, ny) {
@@ -563,7 +603,7 @@ impl<T: GameType> Game<T> {
 
             // Otherwise, continue searching in all directions
             for &dir in &ALL_DIRECTIONS {
-                if let Some((nx, ny)) = self.push_pos(cx, cy, dir) {
+                if let Some((nx, ny)) = self.move_pos(cx, cy, dir) {
                     if self.get_tile(nx, ny) != Tile::Wall && !corral_visited.get(nx, ny) {
                         stack.push((nx, ny));
                         corral_visited.set(nx, ny);
@@ -581,9 +621,10 @@ impl<T: GameType> Game<T> {
         for box_idx in corral_edge.iter() {
             let (bx, by) = self.box_pos(box_idx as usize);
             for &dir in &ALL_DIRECTIONS {
-                if let (Some((nx, ny)), Some((px, py))) =
-                    (self.push_pos(bx, by, dir), self.pull_pos(bx, by, dir))
-                {
+                if let (Some((nx, ny)), Some((px, py))) = (
+                    self.move_pos(bx, by, dir),
+                    self.move_pos(bx, by, dir.reverse()),
+                ) {
                     // Ignore pushes originating from within the corral
                     if corral_visited.get(px, py) {
                         continue;
@@ -661,9 +702,9 @@ impl<T: GameType> Game<T> {
         pulls: &mut Moves<Reverse>,
     ) -> (u8, u8) {
         self.player_dfs(player, visited, |(x, y), dir, box_idx| {
-            if let Some((dest_x, dest_y)) = self.pull_pos(x, y, dir) {
+            if let Some((dest_x, dest_y)) = self.move_pos(x, y, dir.reverse()) {
                 if !self.is_blocked(dest_x, dest_y) {
-                    pulls.add(box_idx, dir);
+                    pulls.add(box_idx, dir.reverse());
                 }
             }
         })
@@ -693,7 +734,7 @@ impl<T: GameType> Game<T> {
         while let Some((x, y)) = stack.pop() {
             // Check all 4 directions
             for &dir in &ALL_DIRECTIONS {
-                if let Some((nx, ny)) = self.push_pos(x, y, dir) {
+                if let Some((nx, ny)) = self.move_pos(x, y, dir) {
                     // If there's a box, notify the closure
                     if let Some(box_idx) = self.box_at(nx, ny) {
                         on_box((x, y), dir, box_idx);
@@ -778,7 +819,7 @@ impl GameType for Forward {
     }
 
     fn unapply_move(&self, game: &mut Game<Self>, move_: Move<Self>) {
-        game.pull(move_.box_index, move_.direction);
+        game.pull(move_.box_index, move_.direction.reverse());
     }
 
     fn is_forward(&self) -> bool {
@@ -795,7 +836,8 @@ impl GameType for Forward {
 
     fn compute_unmoves(&self, game: &Game<Self>) -> (Moves<Self>, PlayerPos) {
         let (pulls, canonical_pos) = game.compute_pulls();
-        (pulls.into(), canonical_pos)
+        let pushes = pulls.into();
+        (pushes, canonical_pos)
     }
 }
 
@@ -805,7 +847,7 @@ impl GameType for Reverse {
     }
 
     fn unapply_move(&self, game: &mut Game<Self>, move_: Move<Self>) {
-        game.push(move_.box_index, move_.direction);
+        game.push(move_.box_index, move_.direction.reverse());
     }
 
     fn is_forward(&self) -> bool {
@@ -818,7 +860,8 @@ impl GameType for Reverse {
 
     fn compute_unmoves(&self, game: &Game<Self>) -> (Moves<Self>, PlayerPos) {
         let (pushes, canonical_pos) = game.compute_pushes();
-        (pushes.into(), canonical_pos)
+        let pulls = pushes.into();
+        (pulls, canonical_pos)
     }
 }
 
@@ -985,24 +1028,6 @@ impl From<&Game<Forward>> for Game<Reverse> {
             height: game.height,
             boxes: game.boxes.clone(),
             goals: game.goals.clone(),
-            game_type: Reverse,
-        }
-    }
-}
-
-impl From<Moves<Reverse>> for Moves<Forward> {
-    fn from(moves_: Moves<Reverse>) -> Self {
-        Moves {
-            bits: moves_.bits,
-            game_type: Forward,
-        }
-    }
-}
-
-impl From<Moves<Forward>> for Moves<Reverse> {
-    fn from(moves_: Moves<Forward>) -> Self {
-        Moves {
-            bits: moves_.bits,
             game_type: Reverse,
         }
     }
@@ -1374,7 +1399,7 @@ mod tests {
             actual,
             vec![Move {
                 box_index: 0,
-                direction: Direction::Left,
+                direction: Direction::Right,
                 game_type: Reverse
             }]
         );
@@ -1432,7 +1457,7 @@ mod tests {
         assert!(game.is_solved());
 
         // Pull
-        game.pull(box_idx, Direction::Right);
+        game.pull(box_idx, Direction::Left);
 
         // Should be back to original state
         assert_eq!(game.player, original_player);
@@ -1460,7 +1485,7 @@ mod tests {
             let box_idx = game.boxes.index[box_idx.1 as usize][box_idx.0 as usize];
 
             game.push(box_idx, direction);
-            game.pull(box_idx, direction);
+            game.pull(box_idx, direction.reverse());
 
             assert_eq!(game.player, original.player, "Failed for {:?}", direction);
             assert_eq!(game.boxes, original.boxes, "Failed for {:?}", direction);

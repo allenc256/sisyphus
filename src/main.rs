@@ -47,11 +47,16 @@ fn print_solution(game: &Game<Forward>, solution: &[MoveByPos<Forward>]) {
     let mut count = 0;
     let total = solution.len();
     for push in solution {
-        game.push_by_pos(push.box_pos.0, push.box_pos.1, push.direction);
+        game.push_by_pos(push.box_x(), push.box_y(), push.direction());
         count += 1;
         println!(
             "Push crate ({}, {}) {} ({}/{}):\n{}",
-            push.box_pos.0, push.box_pos.1, push.direction, count, total, game
+            push.box_x(),
+            push.box_y(),
+            push.direction(),
+            count,
+            total,
+            game
         );
     }
 }

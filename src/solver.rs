@@ -211,9 +211,9 @@ impl<H: Heuristic, R: Tracer, T: GameType> Searcher<H, R, T> {
 
         // Try each push
         for move_ in &moves {
-            let old_box_pos = game.box_pos(move_.box_index as usize);
+            let old_box_pos = game.box_pos(move_.box_index() as usize);
             game.apply_move(move_);
-            let new_box_pos = game.box_pos(move_.box_index as usize);
+            let new_box_pos = game.box_pos(move_.box_index() as usize);
 
             if let Some(tracer) = &self.tracer {
                 tracer.trace_move(game, threshold, f_cost, g_cost, move_);
@@ -281,24 +281,21 @@ impl<H: Heuristic, R: Tracer, T: GameType> Searcher<H, R, T> {
             // Try each unmove to find which one leads to parent state
             let mut found = false;
             for unmove in &unmoves {
-                let old_box_pos = current_game.box_pos(unmove.box_index as usize);
+                let old_box_pos = current_game.box_pos(unmove.box_index() as usize);
                 current_game.unapply_move(unmove);
-                let new_box_pos = current_game.box_pos(unmove.box_index as usize);
+                let new_box_pos = current_game.box_pos(unmove.box_index() as usize);
+                let (move_box_x, move_box_y) = if self.initial_game.game_type().is_forward() {
+                    new_box_pos
+                } else {
+                    old_box_pos
+                };
 
                 // Compute hash of this previous state
                 let prev_hash = self.zobrist.compute_hash(&current_game);
 
                 // Check if this matches the parent we're looking for
                 if prev_hash == target_parent_hash {
-                    solution.push(MoveByPos {
-                        box_pos: if self.initial_game.game_type().is_forward() {
-                            new_box_pos
-                        } else {
-                            old_box_pos
-                        },
-                        direction: unmove.direction,
-                        game_type: T::default(),
-                    });
+                    solution.push(MoveByPos::new(move_box_x, move_box_y, unmove.direction()));
                     current_hash = prev_hash;
                     found = true;
                     break;
@@ -428,7 +425,7 @@ impl<H: Heuristic, R: Tracer> Solver<H, R> {
     fn reconstruct_solution_reverse(&self, game: &Game<Reverse>) -> Vec<MoveByPos<Forward>> {
         self.reconstruct_solution(
             self.forwards.reconstruct_solution(&game.into()),
-            self.reverse.reconstruct_solution(&game),
+            self.reverse.reconstruct_solution(game),
         )
     }
 
@@ -438,11 +435,7 @@ impl<H: Heuristic, R: Tracer> Solver<H, R> {
         backwards_soln: Vec<MoveByPos<Reverse>>,
     ) -> Vec<MoveByPos<Forward>> {
         for move_by_pos in backwards_soln.iter().rev() {
-            forwards_soln.push(MoveByPos {
-                box_pos: move_by_pos.box_pos,
-                direction: move_by_pos.direction,
-                game_type: Forward,
-            });
+            forwards_soln.push(move_by_pos.into());
         }
         self.verify_solution(&forwards_soln);
         forwards_soln
@@ -454,12 +447,12 @@ impl<H: Heuristic, R: Tracer> Solver<H, R> {
         for (i, push) in solution.iter().enumerate() {
             // Get box index at this position
             let box_index = test_game
-                .box_at(push.box_pos.0, push.box_pos.1)
+                .box_at(push.box_x(), push.box_y())
                 .unwrap_or_else(|| {
                     panic!(
                         "Solution verification failed: no box at position ({}, {}) for push {}",
-                        push.box_pos.0,
-                        push.box_pos.1,
+                        push.box_x(),
+                        push.box_y(),
                         i + 1
                     )
                 });
@@ -468,22 +461,18 @@ impl<H: Heuristic, R: Tracer> Solver<H, R> {
             let (valid_pushes, _canonical_pos) = test_game.compute_pushes();
 
             // Verify that this push is among the valid pushes
-            let index_push = Move {
-                box_index,
-                direction: push.direction,
-                game_type: Forward,
-            };
+            let index_push = Move::new(box_index, push.direction());
             assert!(
                 valid_pushes.contains(index_push),
                 "Solution verification failed: push {} (box at ({}, {}), direction {:?}) is not valid",
                 i + 1,
-                push.box_pos.0,
-                push.box_pos.1,
-                push.direction
+                push.box_x(),
+                push.box_y(),
+                push.direction()
             );
 
             // Apply the push
-            test_game.push_by_pos(push.box_pos.0, push.box_pos.1, push.direction);
+            test_game.push_by_pos(push.box_x(), push.box_y(), push.direction());
         }
 
         // Verify final state is solved
@@ -517,7 +506,7 @@ mod tests {
             // Verify solution works
             let mut test_game = Game::from_text(input).unwrap();
             for push in moves {
-                test_game.push_by_pos(push.box_pos.0, push.box_pos.1, push.direction);
+                test_game.push_by_pos(push.box_x(), push.box_y(), push.direction());
             }
             assert!(test_game.is_solved());
         }
@@ -554,7 +543,7 @@ mod tests {
             // Verify solution works
             let mut test_game = Game::from_text(input).unwrap();
             for push in moves {
-                test_game.push_by_pos(push.box_pos.0, push.box_pos.1, push.direction);
+                test_game.push_by_pos(push.box_x(), push.box_y(), push.direction());
             }
             assert!(test_game.is_solved());
         }
