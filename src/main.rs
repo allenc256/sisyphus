@@ -26,16 +26,16 @@ enum HeuristicType {
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
 enum Direction {
-    Forwards,
-    Backwards,
+    Forward,
+    Reverse,
     Bidirectional,
 }
 
 impl From<Direction> for SearchType {
     fn from(dir: Direction) -> Self {
         match dir {
-            Direction::Forwards => SearchType::Forwards,
-            Direction::Backwards => SearchType::Backwards,
+            Direction::Forward => SearchType::Forward,
+            Direction::Reverse => SearchType::Reverse,
             Direction::Bidirectional => SearchType::Bidirectional,
         }
     }

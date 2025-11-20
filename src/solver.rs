@@ -71,8 +71,8 @@ struct BackwardsSearchHelper;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SearchType {
-    Forwards,
-    Backwards,
+    Forward,
+    Reverse,
     Bidirectional,
 }
 
@@ -459,8 +459,8 @@ impl<H: Heuristic, T: Tracer> Solver<H, T> {
 
         loop {
             let is_forwards = match self.search_type {
-                SearchType::Forwards => true,
-                SearchType::Backwards => false,
+                SearchType::Forward => true,
+                SearchType::Reverse => false,
                 SearchType::Bidirectional => {
                     self.forwards.nodes_explored() <= self.backwards.nodes_explored()
                 }
@@ -640,7 +640,7 @@ mod tests {
             5000000,
             GreedyHeuristic::new_forward(game),
             GreedyHeuristic::new_reverse(game),
-            SearchType::Forwards,
+            SearchType::Forward,
             game,
             true,
             true,
