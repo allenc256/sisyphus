@@ -47,12 +47,12 @@ fn print_solution(game: &Game, solution: &[Push]) {
     let mut count = 0;
     let total = solution.len();
     for push in solution {
-        let (box_x, box_y) = game.box_positions()[push.box_index() as usize];
+        let (box_x, box_y) = game.box_position(push.box_index());
         game.push(*push);
         count += 1;
         println!(
             "Push crate #{} ({}, {}) {} ({}/{}):\n{}",
-            push.box_index() + 1,
+            push.box_index().0 + 1,
             box_x,
             box_y,
             push.direction(),

@@ -4,6 +4,10 @@ use std::{fmt, marker::PhantomData};
 
 pub const MAX_SIZE: usize = 64;
 pub const MAX_BOXES: usize = 64;
+pub const NO_BOX: BoxIndex = BoxIndex(255);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub struct BoxIndex(pub u8);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Tile {
@@ -84,20 +88,20 @@ impl fmt::Display for Direction {
 }
 
 pub trait Move {
-    fn new(box_index: u8, direction: Direction) -> Self;
-    fn box_index(&self) -> u8;
+    fn new(box_index: BoxIndex, direction: Direction) -> Self;
+    fn box_index(&self) -> BoxIndex;
     fn direction(&self) -> Direction;
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Push {
-    box_index: u8,
+    box_index: BoxIndex,
     direction: Direction,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Pull {
-    box_index: u8,
+    box_index: BoxIndex,
     direction: Direction,
 }
 
@@ -120,14 +124,14 @@ impl Pull {
 }
 
 impl Move for Push {
-    fn new(box_index: u8, direction: Direction) -> Self {
+    fn new(box_index: BoxIndex, direction: Direction) -> Self {
         Self {
             box_index,
             direction,
         }
     }
 
-    fn box_index(&self) -> u8 {
+    fn box_index(&self) -> BoxIndex {
         self.box_index
     }
 
@@ -137,14 +141,14 @@ impl Move for Push {
 }
 
 impl Move for Pull {
-    fn new(box_index: u8, direction: Direction) -> Self {
+    fn new(box_index: BoxIndex, direction: Direction) -> Self {
         Self {
             box_index,
             direction,
         }
     }
 
-    fn box_index(&self) -> u8 {
+    fn box_index(&self) -> BoxIndex {
         self.box_index
     }
 
@@ -169,9 +173,9 @@ impl<T: Move> Moves<T> {
         }
     }
 
-    fn add(&mut self, box_index: u8, direction: Direction) {
+    fn add(&mut self, box_index: BoxIndex, direction: Direction) {
         let dir_idx = direction.index();
-        self.bits[dir_idx].add(box_index);
+        self.bits[dir_idx].add(box_index.0);
     }
 
     pub fn len(&self) -> usize {
@@ -191,7 +195,7 @@ impl<T: Move> Moves<T> {
 
     pub fn contains(&self, move_: T) -> bool {
         let dir_idx = move_.direction().index();
-        self.bits[dir_idx].contains(move_.box_index())
+        self.bits[dir_idx].contains(move_.box_index().0)
     }
 
     pub fn iter(&self) -> MovesIter<T> {
@@ -240,7 +244,7 @@ impl<T: Move> Iterator for MovesIter<T> {
         loop {
             if let Some(box_index) = self.current_iter.next() {
                 let direction = Direction::from_index(self.dir_idx);
-                return Some(T::new(box_index, direction));
+                return Some(T::new(BoxIndex(box_index), direction));
             }
 
             // Move to next direction
@@ -265,32 +269,32 @@ impl<T: Move> IntoIterator for &'_ Moves<T> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Boxes {
     positions: ArrayVec<(u8, u8), MAX_BOXES>,
-    // Maps board position to box index (255 = no box at this position)
-    index: [[u8; MAX_SIZE]; MAX_SIZE],
+    // Maps board position to box index (NO_BOX = no box at this position)
+    index: [[BoxIndex; MAX_SIZE]; MAX_SIZE],
 }
 
 impl Boxes {
     fn new() -> Self {
         Boxes {
             positions: ArrayVec::new(),
-            index: [[255u8; MAX_SIZE]; MAX_SIZE],
+            index: [[NO_BOX; MAX_SIZE]; MAX_SIZE],
         }
     }
 
     fn add(&mut self, x: u8, y: u8) {
-        self.index[y as usize][x as usize] = self.positions.len() as u8;
+        self.index[y as usize][x as usize] = BoxIndex(self.positions.len() as u8);
         self.positions.push((x, y));
     }
 
     fn move_box(&mut self, from_x: u8, from_y: u8, to_x: u8, to_y: u8) {
         let idx = self.index[from_y as usize][from_x as usize];
-        self.positions[idx as usize] = (to_x, to_y);
-        self.index[from_y as usize][from_x as usize] = 255;
+        self.positions[idx.0 as usize] = (to_x, to_y);
+        self.index[from_y as usize][from_x as usize] = NO_BOX;
         self.index[to_y as usize][to_x as usize] = idx;
     }
 
     fn has_box_at(&self, x: u8, y: u8) -> bool {
-        self.index[y as usize][x as usize] != 255
+        self.index[y as usize][x as usize] != NO_BOX
     }
 }
 
@@ -439,9 +443,14 @@ impl Game {
 
     /// Get the box index at the given position, if any.
     /// Returns Some(box_index) if there is a box at (x, y), None otherwise.
-    pub fn box_at(&self, x: u8, y: u8) -> Option<u8> {
+    pub fn box_at(&self, x: u8, y: u8) -> Option<BoxIndex> {
         let idx = self.boxes.index[y as usize][x as usize];
-        if idx == 255 { None } else { Some(idx) }
+        if idx == NO_BOX { None } else { Some(idx) }
+    }
+
+    /// Get the position of a box given its index.
+    pub fn box_position(&self, box_index: BoxIndex) -> (u8, u8) {
+        self.boxes.positions[box_index.0 as usize]
     }
 
     /// Move from position (x, y) in the given direction.
@@ -462,13 +471,7 @@ impl Game {
     /// Updates the player position to where the box was.
     /// Panics if the push is invalid (invalid box index, destination blocked, etc.)
     pub fn push(&mut self, push: Push) {
-        assert!(
-            (push.box_index as usize) < self.boxes.positions.len() as usize,
-            "Invalid box index: {}",
-            push.box_index
-        );
-
-        let (x, y) = self.boxes.positions[push.box_index as usize];
+        let (x, y) = self.box_position(push.box_index);
         let (new_x, new_y) = self
             .move_position(x, y, push.direction)
             .expect("Push destination out of bounds");
@@ -501,14 +504,8 @@ impl Game {
     }
 
     pub fn pull(&mut self, pull: Pull) {
-        assert!(
-            (pull.box_index as usize) < self.boxes.positions.len() as usize,
-            "Invalid box index: {}",
-            pull.box_index
-        );
-
         // Current box position (after the push we're undoing)
-        let (new_x, new_y) = self.boxes.positions[pull.box_index as usize];
+        let (new_x, new_y) = self.box_position(pull.box_index);
 
         // Calculate where box came from (opposite direction)
         let (old_x, old_y) = self
@@ -553,13 +550,14 @@ impl Game {
 
         // First pass: clear all current positions in index
         for &(box_x, box_y) in game.boxes.positions.iter() {
-            game.boxes.index[box_y as usize][box_x as usize] = 255;
+            game.boxes.index[box_y as usize][box_x as usize] = NO_BOX;
         }
 
         // Second pass: set all new positions
-        for (i, &goal_pos) in game.goal_positions.iter().enumerate() {
-            game.boxes.positions[i] = goal_pos;
-            game.boxes.index[goal_pos.1 as usize][goal_pos.0 as usize] = i as u8;
+        for (goal_idx, &goal_pos) in game.goal_positions.iter().enumerate() {
+            let box_idx = BoxIndex(goal_idx as u8);
+            game.boxes.positions[goal_idx] = goal_pos;
+            game.boxes.index[goal_pos.1 as usize][goal_pos.0 as usize] = box_idx;
         }
 
         // Set empty_goals to 0 since all boxes are on goals
@@ -614,8 +612,8 @@ impl Game {
         };
         let mut pushes = Moves::new();
         let canonical_pos = self.player_dfs((x, y), visited, |_player_pos, dir, box_idx| {
-            boxes.add(box_idx);
-            let box_pos = self.boxes.positions[box_idx as usize];
+            boxes.add(box_idx.0);
+            let box_pos = self.box_position(box_idx);
             if let Some((dest_x, dest_y)) = self.move_position(box_pos.0, box_pos.1, dir) {
                 if !self.is_blocked(dest_x, dest_y) {
                     pushes.add(box_idx, dir);
@@ -640,7 +638,7 @@ impl Game {
         // other side of a valid player push (any corral NOT on the other side
         // of a player push full the "P" condition of a PI-corral).
         for push in pushes.iter() {
-            let (bx, by) = self.boxes.positions[push.box_index as usize];
+            let (bx, by) = self.box_position(push.box_index);
             let Some((nx, ny)) = self.move_position(bx, by, push.direction) else {
                 panic!("Invalid push");
             };
@@ -698,8 +696,8 @@ impl Game {
                     can_prune = true;
                 }
                 // If we've hit the edge of the corral, stop exploring further
-                if player_reachable_boxes.contains(box_idx) {
-                    corral_edge.add(box_idx);
+                if player_reachable_boxes.contains(box_idx.0) {
+                    corral_edge.add(box_idx.0);
                     continue;
                 }
             } else if is_goal {
@@ -725,7 +723,7 @@ impl Game {
 
         // Check the PI conditions over the edge boxes
         for box_idx in corral_edge.iter() {
-            let (bx, by) = self.boxes.positions[box_idx as usize];
+            let (bx, by) = self.box_position(BoxIndex(box_idx));
             for &dir in &ALL_DIRECTIONS {
                 if let (Some((nx, ny)), Some((px, py))) = (
                     self.move_position(bx, by, dir),
@@ -752,7 +750,7 @@ impl Game {
                         return None;
                     }
                     // Everything checks out for this push
-                    pushes.add(box_idx, dir);
+                    pushes.add(BoxIndex(box_idx), dir);
                 }
             }
         }
@@ -826,7 +824,7 @@ impl Game {
         mut on_box: F,
     ) -> (u8, u8)
     where
-        F: FnMut((u8, u8), Direction, u8),
+        F: FnMut((u8, u8), Direction, BoxIndex),
     {
         let mut canonical_pos = start_player;
 
@@ -1206,7 +1204,7 @@ mod tests {
 
         // Try to push with invalid box index
         game.push(Push {
-            box_index: 10,
+            box_index: BoxIndex(10),
             direction: Direction::Right,
         });
     }
@@ -1259,19 +1257,19 @@ mod tests {
         let mut actual = pushes.iter().collect::<Vec<_>>();
         let mut expected = vec![
             Push {
-                box_index: 0,
+                box_index: BoxIndex(0),
                 direction: Direction::Up,
             },
             Push {
-                box_index: 0,
+                box_index: BoxIndex(0),
                 direction: Direction::Down,
             },
             Push {
-                box_index: 1,
+                box_index: BoxIndex(1),
                 direction: Direction::Left,
             },
             Push {
-                box_index: 1,
+                box_index: BoxIndex(1),
                 direction: Direction::Right,
             },
         ];
@@ -1297,7 +1295,7 @@ mod tests {
         assert_eq!(
             actual,
             vec![Pull {
-                box_index: 0,
+                box_index: BoxIndex(0),
                 direction: Direction::Right
             }]
         );
@@ -1316,11 +1314,11 @@ mod tests {
 
         let mut expected = vec![
             Pull {
-                box_index: 0,
+                box_index: BoxIndex(0),
                 direction: Direction::Left,
             },
             Pull {
-                box_index: 0,
+                box_index: BoxIndex(0),
                 direction: Direction::Right,
             },
         ];
@@ -1434,8 +1432,8 @@ mod tests {
         );
 
         let mut expected_moves = Moves::new();
-        expected_moves.add(0, Direction::Left);
-        expected_moves.add(1, Direction::Left);
+        expected_moves.add(BoxIndex(0), Direction::Left);
+        expected_moves.add(BoxIndex(1), Direction::Left);
         let expected_size = 2;
 
         check_pi_corral(&game, 3, 2, Some((expected_moves, expected_size)));
@@ -1456,9 +1454,9 @@ mod tests {
         );
 
         let mut expected_moves = Moves::new();
-        expected_moves.add(1, Direction::Left);
-        expected_moves.add(2, Direction::Left);
-        expected_moves.add(4, Direction::Left);
+        expected_moves.add(BoxIndex(1), Direction::Left);
+        expected_moves.add(BoxIndex(2), Direction::Left);
+        expected_moves.add(BoxIndex(4), Direction::Left);
         let expected_size = 3;
 
         check_pi_corral(&game, 3, 2, Some((expected_moves, expected_size)));
@@ -1496,8 +1494,8 @@ mod tests {
         );
 
         let mut expected_moves = Moves::new();
-        expected_moves.add(0, Direction::Left);
-        expected_moves.add(1, Direction::Left);
+        expected_moves.add(BoxIndex(0), Direction::Left);
+        expected_moves.add(BoxIndex(1), Direction::Left);
         let expected_size = 2;
 
         check_pi_corral(&game, 2, 2, Some((expected_moves, expected_size)));
@@ -1518,7 +1516,7 @@ mod tests {
         );
 
         let mut expected_moves = Moves::new();
-        expected_moves.add(0, Direction::Left);
+        expected_moves.add(BoxIndex(0), Direction::Left);
         let expected_size = 1;
 
         check_pi_corral(&game, 3, 2, Some((expected_moves, expected_size)));
@@ -1543,12 +1541,12 @@ mod tests {
         );
 
         let mut corral1_moves = Moves::new();
-        corral1_moves.add(8, Direction::Right);
-        corral1_moves.add(10, Direction::Right);
+        corral1_moves.add(BoxIndex(8), Direction::Right);
+        corral1_moves.add(BoxIndex(10), Direction::Right);
         let corral1_size = 2;
 
         let mut corral2_moves = Moves::new();
-        corral2_moves.add(9, Direction::Left);
+        corral2_moves.add(BoxIndex(9), Direction::Left);
         let corral2_size = 1;
 
         check_pi_corral(&game, 13, 5, None);

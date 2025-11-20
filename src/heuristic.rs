@@ -57,8 +57,8 @@ impl GreedyHeuristic {
     fn compute_distances_from_goals(game: &Game) -> [[[u16; MAX_SIZE]; MAX_SIZE]; MAX_BOXES] {
         let mut distances = [[[u16::MAX; MAX_SIZE]; MAX_SIZE]; MAX_BOXES];
 
-        for goal_idx in 0..game.box_count() {
-            Self::bfs_pulls(game, goal_idx, &mut distances[goal_idx]);
+        for (goal_idx, &goal_pos) in game.goal_positions().iter().enumerate() {
+            Self::bfs_pulls(game, goal_pos, &mut distances[goal_idx]);
         }
 
         distances
@@ -68,19 +68,18 @@ impl GreedyHeuristic {
     fn compute_distances_from_starts(game: &Game) -> [[[u16; MAX_SIZE]; MAX_SIZE]; MAX_BOXES] {
         let mut distances = [[[u16::MAX; MAX_SIZE]; MAX_SIZE]; MAX_BOXES];
 
-        for box_idx in 0..game.box_count() {
-            Self::bfs_pushes(game, box_idx, &mut distances[box_idx]);
+        for (box_idx, &start_pos) in game.start_positions().iter().enumerate() {
+            Self::bfs_pushes(game, start_pos, &mut distances[box_idx]);
         }
 
         distances
     }
 
     /// BFS using pulls to compute distances from a goal position
-    fn bfs_pulls(game: &Game, goal_idx: usize, distances: &mut [[u16; MAX_SIZE]; MAX_SIZE]) {
-        let start_pos = game.goal_positions()[goal_idx];
+    fn bfs_pulls(game: &Game, goal_pos: (u8, u8), distances: &mut [[u16; MAX_SIZE]; MAX_SIZE]) {
         let mut queue = VecDeque::new();
-        queue.push_back((start_pos.0, start_pos.1));
-        distances[start_pos.1 as usize][start_pos.0 as usize] = 0;
+        queue.push_back((goal_pos.0, goal_pos.1));
+        distances[goal_pos.1 as usize][goal_pos.0 as usize] = 0;
 
         while let Some((box_x, box_y)) = queue.pop_front() {
             let dist = distances[box_y as usize][box_x as usize];
@@ -109,8 +108,7 @@ impl GreedyHeuristic {
     }
 
     /// BFS using pushes to compute distances from a box start position
-    fn bfs_pushes(game: &Game, box_idx: usize, distances: &mut [[u16; MAX_SIZE]; MAX_SIZE]) {
-        let start_pos = game.start_positions()[box_idx];
+    fn bfs_pushes(game: &Game, start_pos: (u8, u8), distances: &mut [[u16; MAX_SIZE]; MAX_SIZE]) {
         let mut queue = VecDeque::new();
         queue.push_back((start_pos.0, start_pos.1));
         distances[start_pos.1 as usize][start_pos.0 as usize] = 0;
