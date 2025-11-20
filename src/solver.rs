@@ -383,6 +383,7 @@ impl SearchHelper for BackwardsSearchHelper {
 }
 
 impl<H: Heuristic, T: Tracer> Solver<H, T> {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         max_nodes_explored: usize,
         forward_heuristic: H,
@@ -470,8 +471,8 @@ impl<H: Heuristic, T: Tracer> Solver<H, T> {
     }
 
     fn reconstruct_solution(&self, game: &Game) -> Vec<Push> {
-        let forward_soln = self.forward.reconstruct_solution(&game, true);
-        let reverse_soln = self.reverse.reconstruct_solution(&game, false);
+        let forward_soln = self.forward.reconstruct_solution(game, true);
+        let reverse_soln = self.reverse.reconstruct_solution(game, false);
         self.combine_solution(&forward_soln, &reverse_soln)
     }
 

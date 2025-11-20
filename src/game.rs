@@ -109,7 +109,7 @@ pub struct Pull {
 }
 
 impl Push {
-    pub fn to_pull(&self) -> Pull {
+    pub fn to_pull(self) -> Pull {
         Pull {
             box_index: self.box_index,
             direction: self.direction.reverse(),
@@ -118,7 +118,7 @@ impl Push {
 }
 
 impl Pull {
-    pub fn to_push(&self) -> Push {
+    pub fn to_push(self) -> Push {
         Push {
             box_index: self.box_index,
             direction: self.direction.reverse(),
