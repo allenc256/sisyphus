@@ -13,10 +13,7 @@ use levels::Levels;
 use solver::{SearchType, SolveResult, Solver};
 use std::{cell::Cell, time::Instant};
 
-use crate::{
-    game::Move,
-    solver::{SearchDirection, Tracer},
-};
+use crate::{game::Move, solver::Tracer};
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
 enum HeuristicType {
@@ -75,7 +72,7 @@ impl VerboseTracer {
 impl Tracer for VerboseTracer {
     fn trace_move<M: Move>(
         &self,
-        search_dir: SearchDirection,
+        is_forwards_search: bool,
         game: &Game,
         threshold: usize,
         f_cost: usize,
@@ -83,11 +80,12 @@ impl Tracer for VerboseTracer {
         _move: &M,
     ) {
         let new_count = self.trace_count.get() + 1;
+        let move_type = if is_forwards_search { "Push" } else { "Pull" };
         self.trace_count.set(new_count);
         if self.trace_start <= new_count && new_count <= self.trace_end {
             println!(
-                "{:?} search for move {} (f_cost={}, g_cost={}, threshold={}):\n{}",
-                search_dir, new_count, f_cost, g_cost, threshold, game
+                "{} {} (f_cost={}, g_cost={}, threshold={}):\n{}",
+                move_type, new_count, f_cost, g_cost, threshold, game
             );
         }
     }

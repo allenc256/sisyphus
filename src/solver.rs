@@ -43,7 +43,6 @@ struct Searcher<H: Heuristic, T: Tracer, S: SearchHelper> {
     table: HashMap<u64, TableEntry>, // Transposition table mapping state hash to entry
     zobrist: Rc<Zobrist>,
     heuristic: Rc<H>,
-    direction: SearchDirection,
     initial_game: Rc<Game>,
     initial_hash: u64,
     initial_boxes_hash: u64,
@@ -52,6 +51,8 @@ struct Searcher<H: Heuristic, T: Tracer, S: SearchHelper> {
     helper: S,
 }
 
+/// Internal trait containing search logic that is polymorphic depending on the
+/// direction of the search (forward vs reverse).
 trait SearchHelper {
     type Move: Move;
 
@@ -59,6 +60,7 @@ trait SearchHelper {
     fn compute_unmoves(&self, game: &Game) -> Moves<Self::Move>;
     fn apply_move(&self, game: &mut Game, move_: &Self::Move);
     fn unapply_move(&self, game: &mut Game, move_: &Self::Move);
+    fn is_forwards_search(&self) -> bool;
 }
 
 struct ForwardsSearchHelper {
@@ -66,12 +68,6 @@ struct ForwardsSearchHelper {
 }
 
 struct BackwardsSearchHelper;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SearchDirection {
-    Forwards,
-    Backwards,
-}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SearchType {
@@ -90,7 +86,7 @@ pub struct Solver<H: Heuristic, T: Tracer> {
 pub trait Tracer {
     fn trace_move<M: Move>(
         &self,
-        search_dir: SearchDirection,
+        is_forwards: bool,
         game: &Game,
         threshold: usize,
         f_cost: usize,
@@ -104,7 +100,6 @@ impl<H: Heuristic, T: Tracer, S: SearchHelper> Searcher<H, T, S> {
         zobrist: Rc<Zobrist>,
         max_nodes_explored: usize,
         heuristic: Rc<H>,
-        direction: SearchDirection,
         initial_game: Rc<Game>,
         freeze_deadlocks: bool,
         tracer: Option<Rc<T>>,
@@ -112,15 +107,12 @@ impl<H: Heuristic, T: Tracer, S: SearchHelper> Searcher<H, T, S> {
     ) -> Self {
         let initial_hash = zobrist.compute_hash(&initial_game);
         let initial_boxes_hash = zobrist.compute_boxes_hash(&initial_game);
-        // Only check freeze deadlocks and PI-corrals for forward search
-        let freeze_deadlocks = freeze_deadlocks && direction == SearchDirection::Forwards;
         let mut searcher = Searcher {
             nodes_explored: 0,
             max_nodes_explored,
             table: HashMap::new(),
             zobrist,
             heuristic,
-            direction,
             initial_game,
             initial_hash,
             initial_boxes_hash,
@@ -240,7 +232,14 @@ impl<H: Heuristic, T: Tracer, S: SearchHelper> Searcher<H, T, S> {
             let new_box_pos = game.box_pos(move_.box_index() as usize);
 
             if let Some(tracer) = &self.tracer {
-                tracer.trace_move(self.direction, game, threshold, f_cost, g_cost, &move_);
+                tracer.trace_move(
+                    self.helper.is_forwards_search(),
+                    game,
+                    threshold,
+                    f_cost,
+                    g_cost,
+                    &move_,
+                );
             }
 
             if self.freeze_deadlocks
@@ -315,9 +314,10 @@ impl<H: Heuristic, T: Tracer, S: SearchHelper> Searcher<H, T, S> {
                 // Check if this matches the parent we're looking for
                 if prev_hash == target_parent_hash {
                     solution.push(MoveByPos {
-                        box_pos: match self.direction {
-                            SearchDirection::Forwards => new_box_pos,
-                            SearchDirection::Backwards => old_box_pos,
+                        box_pos: if self.helper.is_forwards_search() {
+                            new_box_pos
+                        } else {
+                            old_box_pos
                         },
                         direction: unmove.direction(),
                     });
@@ -341,9 +341,10 @@ impl<H: Heuristic, T: Tracer, S: SearchHelper> Searcher<H, T, S> {
     }
 
     fn compute_heuristic(&self, game: &Game) -> Cost {
-        match self.direction {
-            SearchDirection::Forwards => self.heuristic.compute_forward(game),
-            SearchDirection::Backwards => self.heuristic.compute_backward(game),
+        if self.helper.is_forwards_search() {
+            self.heuristic.compute_forward(game)
+        } else {
+            self.heuristic.compute_backward(game)
         }
     }
 }
@@ -370,6 +371,10 @@ impl SearchHelper for ForwardsSearchHelper {
     fn unapply_move(&self, game: &mut Game, push: &Push) {
         game.pull(push.to_pull());
     }
+
+    fn is_forwards_search(&self) -> bool {
+        true
+    }
 }
 
 impl SearchHelper for BackwardsSearchHelper {
@@ -389,6 +394,10 @@ impl SearchHelper for BackwardsSearchHelper {
 
     fn unapply_move(&self, game: &mut Game, pull: &Pull) {
         game.push(pull.to_push())
+    }
+
+    fn is_forwards_search(&self) -> bool {
+        false
     }
 }
 
@@ -413,7 +422,6 @@ impl<H: Heuristic, T: Tracer> Solver<H, T> {
                 zobrist.clone(),
                 max_nodes_explored,
                 heuristic.clone(),
-                SearchDirection::Forwards,
                 forwards_game,
                 freeze_deadlocks,
                 tracer.clone(),
@@ -423,7 +431,6 @@ impl<H: Heuristic, T: Tracer> Solver<H, T> {
                 zobrist,
                 max_nodes_explored,
                 heuristic,
-                SearchDirection::Backwards,
                 backwards_game,
                 freeze_deadlocks,
                 tracer,
@@ -618,7 +625,7 @@ mod tests {
     impl Tracer for NullTracer {
         fn trace_move<M: Move>(
             &self,
-            _search_dir: SearchDirection,
+            _is_forwards_search: bool,
             _game: &Game,
             _threshold: usize,
             _f_cost: usize,
