@@ -43,7 +43,7 @@ struct Searcher<H: Heuristic, T: Tracer, S: SearchHelper> {
     table: HashMap<u64, TableEntry>, // Transposition table mapping state hash to entry
     zobrist: Rc<Zobrist>,
     heuristic: H,
-    initial_game: Rc<Game>,
+    initial_game: Game,
     initial_hash: u64,
     initial_boxes_hash: u64,
     freeze_deadlocks: bool,
@@ -104,7 +104,7 @@ impl<H: Heuristic, T: Tracer, S: SearchHelper> Searcher<H, T, S> {
         zobrist: Rc<Zobrist>,
         max_nodes_explored: usize,
         heuristic: H,
-        initial_game: Rc<Game>,
+        initial_game: Game,
         freeze_deadlocks: bool,
         tracer: Option<Rc<T>>,
         helper: S,
@@ -138,7 +138,7 @@ impl<H: Heuristic, T: Tracer, S: SearchHelper> Searcher<H, T, S> {
     where
         F: Fn(u64) -> bool,
     {
-        let mut game = (*self.initial_game).clone();
+        let mut game = self.initial_game.clone();
         self.reset();
         self.search_helper(
             &mut game,
@@ -388,22 +388,21 @@ impl<H: Heuristic, T: Tracer> Solver<H, T> {
         forward_heuristic: H,
         reverse_heuristic: H,
         search_type: SearchType,
-        game: &Game,
+        game: Game,
         freeze_deadlocks: bool,
         pi_corrals: bool,
         tracer: Option<T>,
     ) -> Self {
         let zobrist = Rc::new(Zobrist::new());
         let tracer = tracer.map(|t| Rc::new(t));
-        let forwards_game = Rc::new(game.clone());
-        let backwards_game = Rc::new(game.make_goal_state());
+        let goal_state = game.make_goal_state();
 
         Solver {
             forward: Searcher::new(
                 zobrist.clone(),
                 max_nodes_explored,
                 forward_heuristic,
-                forwards_game,
+                game,
                 freeze_deadlocks,
                 tracer.clone(),
                 ForwardsSearchHelper { pi_corrals },
@@ -412,7 +411,7 @@ impl<H: Heuristic, T: Tracer> Solver<H, T> {
                 zobrist,
                 max_nodes_explored,
                 reverse_heuristic,
-                backwards_game,
+                goal_state,
                 freeze_deadlocks,
                 tracer,
                 BackwardsSearchHelper,
@@ -481,7 +480,7 @@ impl<H: Heuristic, T: Tracer> Solver<H, T> {
         forward_soln: &[PushByPos],
         reverse_soln: &[PushByPos],
     ) -> Vec<Push> {
-        let mut test_game = (*self.forward.initial_game).clone();
+        let mut test_game = self.forward.initial_game.clone();
         let mut soln = Vec::new();
 
         for (i, push_by_pos) in forward_soln.iter().chain(reverse_soln.iter()).enumerate() {
@@ -534,7 +533,7 @@ mod tests {
                      #@$.#\n\
                      ####";
         let game = Game::from_text(input).unwrap();
-        let mut solver = new_solver(&game);
+        let mut solver = new_solver(game);
         let result = solver.solve();
 
         assert!(matches!(result, SolveResult::Solved(_)));
@@ -556,7 +555,7 @@ mod tests {
                      #@*#\n\
                      ####";
         let game = Game::from_text(input).unwrap();
-        let mut solver = new_solver(&game);
+        let mut solver = new_solver(game);
         let result = solver.solve();
 
         assert!(matches!(result, SolveResult::Solved(_)));
@@ -571,7 +570,7 @@ mod tests {
                      #@$ .#\n\
                      #####";
         let game = Game::from_text(input).unwrap();
-        let mut solver = new_solver(&game);
+        let mut solver = new_solver(game);
         let result = solver.solve();
 
         assert!(matches!(result, SolveResult::Solved(_)));
@@ -593,7 +592,7 @@ mod tests {
                      #@$#.#\n\
                      #####";
         let game = Game::from_text(input).unwrap();
-        let mut solver = new_solver(&game);
+        let mut solver = new_solver(game);
         let result = solver.solve();
         assert_eq!(result, SolveResult::Impossible);
     }
@@ -613,11 +612,11 @@ mod tests {
         }
     }
 
-    fn new_solver(game: &Game) -> Solver<GreedyHeuristic, NullTracer> {
+    fn new_solver(game: Game) -> Solver<GreedyHeuristic, NullTracer> {
         Solver::new(
             5000000,
-            GreedyHeuristic::new_forward(game),
-            GreedyHeuristic::new_reverse(game),
+            GreedyHeuristic::new_forward(&game),
+            GreedyHeuristic::new_reverse(&game),
             SearchType::Forward,
             game,
             true,

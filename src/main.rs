@@ -138,7 +138,7 @@ fn solve_level_helper<H: Heuristic>(
         forward_heuristic,
         reverse_heuristic,
         opts.search_type,
-        game,
+        game.clone(),
         opts.freeze_deadlocks,
         opts.pi_corrals,
         tracer,
