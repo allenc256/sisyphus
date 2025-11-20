@@ -246,8 +246,8 @@ impl<H: Heuristic, T: Tracer, S: SearchHelper> Searcher<H, T, S> {
 
             // Update boxes hash (unhash old position, hash new position)
             let new_boxes_hash = boxes_hash
-                ^ self.zobrist.box_hash(old_box_pos.0, old_box_pos.1)
-                ^ self.zobrist.box_hash(new_box_pos.0, new_box_pos.1);
+                ^ self.zobrist.box_hash(old_box_pos)
+                ^ self.zobrist.box_hash(new_box_pos);
 
             let child_result = self.search_helper(
                 game,

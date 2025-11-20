@@ -1,4 +1,16 @@
-use std::mem::MaybeUninit;
+use std::{fmt, mem::MaybeUninit};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub struct Index(pub u8);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub struct Position(pub u8, pub u8);
+
+impl fmt::Display for Position {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "({}, {})", self.0, self.1)
+    }
+}
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct Bitvector {
@@ -10,14 +22,14 @@ impl Bitvector {
         Self { bits: 0 }
     }
 
-    pub fn contains(&self, index: u8) -> bool {
-        assert!(index < 64, "index out of bounds");
-        (self.bits & (1u64 << index)) != 0
+    pub fn contains(&self, index: Index) -> bool {
+        debug_assert!(index.0 < 64, "index out of bounds");
+        (self.bits & (1u64 << index.0)) != 0
     }
 
-    pub fn add(&mut self, index: u8) {
-        assert!(index < 64, "index out of bounds");
-        self.bits |= 1u64 << index;
+    pub fn add(&mut self, index: Index) {
+        debug_assert!(index.0 < 64, "index out of bounds");
+        self.bits |= 1u64 << index.0;
     }
 
     pub fn is_empty(&self) -> bool {
@@ -44,7 +56,7 @@ pub struct BitvectorIter {
 }
 
 impl Iterator for BitvectorIter {
-    type Item = u8;
+    type Item = Index;
 
     fn next(&mut self) -> Option<Self::Item> {
         if self.bits == 0 {
@@ -52,7 +64,7 @@ impl Iterator for BitvectorIter {
         } else {
             let index = self.bits.trailing_zeros() as u8;
             self.bits &= self.bits - 1; // Clear the lowest set bit
-            Some(index)
+            Some(Index(index))
         }
     }
 }
@@ -70,25 +82,25 @@ impl LazyBitboard {
         }
     }
 
-    pub fn get(&self, x: u8, y: u8) -> bool {
-        assert!(x < 64 && y < 64, "position out of bounds");
-        let y = y as usize;
+    pub fn get(&self, pos: Position) -> bool {
+        debug_assert!(pos.0 < 64 && pos.1 < 64, "position out of bounds");
+        let y = pos.1 as usize;
         if (self.initialized & (1u64 << y)) == 0 {
             false
         } else {
-            unsafe { (*self.data[y].as_ptr() & (1u64 << x)) != 0 }
+            unsafe { (*self.data[y].as_ptr() & (1u64 << pos.0)) != 0 }
         }
     }
 
-    pub fn set(&mut self, x: u8, y: u8) {
-        assert!(x < 64 && y < 64, "position out of bounds");
-        let y = y as usize;
+    pub fn set(&mut self, pos: Position) {
+        assert!(pos.0 < 64 && pos.1 < 64, "position out of bounds");
+        let y = pos.1 as usize;
         if (self.initialized & (1u64 << y)) == 0 {
             self.data[y].write(0);
             self.initialized |= 1u64 << y;
         }
         unsafe {
-            *self.data[y].as_mut_ptr() |= 1u64 << x;
+            *self.data[y].as_mut_ptr() |= 1u64 << pos.0;
         }
     }
 }
@@ -100,20 +112,20 @@ mod tests {
     #[test]
     fn test_bitvector_get_set() {
         let mut bv = Bitvector::new();
-        assert!(!bv.contains(0));
-        assert!(!bv.contains(5));
-        assert!(!bv.contains(63));
+        assert!(!bv.contains(Index(0)));
+        assert!(!bv.contains(Index(5)));
+        assert!(!bv.contains(Index(63)));
 
-        bv.add(5);
-        assert!(!bv.contains(0));
-        assert!(bv.contains(5));
-        assert!(!bv.contains(63));
+        bv.add(Index(5));
+        assert!(!bv.contains(Index(0)));
+        assert!(bv.contains(Index(5)));
+        assert!(!bv.contains(Index(63)));
 
-        bv.add(0);
-        bv.add(63);
-        assert!(bv.contains(0));
-        assert!(bv.contains(5));
-        assert!(bv.contains(63));
+        bv.add(Index(0));
+        bv.add(Index(63));
+        assert!(bv.contains(Index(0)));
+        assert!(bv.contains(Index(5)));
+        assert!(bv.contains(Index(63)));
     }
 
     #[test]
@@ -121,10 +133,10 @@ mod tests {
         let mut bv = Bitvector::new();
         assert!(bv.is_empty());
 
-        bv.add(0);
+        bv.add(Index(0));
         assert!(!bv.is_empty());
 
-        bv.add(63);
+        bv.add(Index(63));
         assert!(!bv.is_empty());
     }
 
@@ -133,47 +145,47 @@ mod tests {
         let mut bv = Bitvector::new();
         assert_eq!(bv.len(), 0);
 
-        bv.add(0);
+        bv.add(Index(0));
         assert_eq!(bv.len(), 1);
 
-        bv.add(5);
+        bv.add(Index(5));
         assert_eq!(bv.len(), 2);
 
-        bv.add(63);
+        bv.add(Index(63));
         assert_eq!(bv.len(), 3);
 
         // Setting the same bit again should not change length
-        bv.add(5);
+        bv.add(Index(5));
         assert_eq!(bv.len(), 3);
     }
 
     #[test]
     fn test_bitvector_iter() {
         let mut bv = Bitvector::new();
-        bv.add(0);
-        bv.add(5);
-        bv.add(10);
-        bv.add(63);
+        bv.add(Index(0));
+        bv.add(Index(5));
+        bv.add(Index(10));
+        bv.add(Index(63));
 
-        let indexes: Vec<u8> = bv.iter().collect();
-        assert_eq!(indexes, vec![0, 5, 10, 63]);
+        let indexes: Vec<Index> = bv.iter().collect();
+        assert_eq!(indexes, vec![Index(0), Index(5), Index(10), Index(63)]);
     }
 
     #[test]
     fn test_bitvector_iter_empty() {
         let bv = Bitvector::new();
-        let indexes: Vec<u8> = bv.iter().collect();
-        assert_eq!(indexes, Vec::<u8>::new());
+        let indexes: Vec<Index> = bv.iter().collect();
+        assert_eq!(indexes, Vec::<Index>::new());
     }
 
     #[test]
     fn test_bitvector_iter_all() {
         let mut bv = Bitvector::new();
         for i in 0..64 {
-            bv.add(i);
+            bv.add(Index(i));
         }
-        let indexes: Vec<u8> = bv.iter().collect();
+        let indexes: Vec<Index> = bv.iter().collect();
         assert_eq!(indexes.len(), 64);
-        assert_eq!(indexes, (0..64).collect::<Vec<u8>>());
+        assert_eq!(indexes, (0..64).map(|i| Index(i as u8)).collect::<Vec<_>>());
     }
 }

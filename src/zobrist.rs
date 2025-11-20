@@ -38,8 +38,8 @@ impl Zobrist {
     }
 
     /// Get hash value for a box at a specific position
-    pub fn box_hash(&self, x: u8, y: u8) -> u64 {
-        self.box_hashes[y as usize][x as usize]
+    pub fn box_hash(&self, pos: Position) -> u64 {
+        self.box_hashes[pos.1 as usize][pos.0 as usize]
     }
 
     /// Get hash value for player position
@@ -53,8 +53,8 @@ impl Zobrist {
     /// Compute hash for all boxes in a game state
     pub fn compute_boxes_hash(&self, game: &Game) -> u64 {
         let mut boxes_hash = 0u64;
-        for &Position(x, y) in game.box_positions() {
-            boxes_hash ^= self.box_hash(x, y);
+        for &pos in game.box_positions() {
+            boxes_hash ^= self.box_hash(pos);
         }
         boxes_hash
     }

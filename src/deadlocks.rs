@@ -34,10 +34,10 @@ impl Frozen {
         if game.box_index(pos).is_none() {
             return false;
         }
-        if self.visited.get(pos.0, pos.1) {
+        if self.visited.get(pos) {
             return true;
         }
-        self.visited.set(pos.0, pos.1);
+        self.visited.set(pos);
         let is_frozen_box = (self.is_frozen_dir(game, pos, Direction::Left)
             || self.is_frozen_dir(game, pos, Direction::Right))
             && (self.is_frozen_dir(game, pos, Direction::Up)
