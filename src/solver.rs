@@ -1,5 +1,5 @@
 use crate::deadlocks::Deadlocks;
-use crate::game::{Game, Move, MoveByPos, Moves, PlayerPos, Pull, Push};
+use crate::game::{Direction, Game, Move, Moves, PlayerPos, Pull, Push};
 use crate::heuristic::{Cost, Heuristic};
 use crate::zobrist::Zobrist;
 use std::collections::HashMap;
@@ -22,7 +22,7 @@ enum SearchResult {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SolveResult {
     /// Puzzle was solved
-    Solved(Vec<MoveByPos>),
+    Solved(Vec<Push>),
     /// Node limit exceeded before solution found
     Cutoff,
     /// Puzzle is impossible to solve
@@ -93,6 +93,12 @@ pub trait Tracer {
         g_cost: usize,
         move_: &M,
     );
+}
+
+#[derive(Debug, Copy, Clone)]
+struct PushByPos {
+    box_pos: (u8, u8),
+    direction: Direction,
 }
 
 impl<H: Heuristic, T: Tracer, S: SearchHelper> Searcher<H, T, S> {
@@ -279,7 +285,7 @@ impl<H: Heuristic, T: Tracer, S: SearchHelper> Searcher<H, T, S> {
         result
     }
 
-    fn reconstruct_solution(&self, final_game: &Game) -> Vec<MoveByPos> {
+    fn reconstruct_solution(&self, final_game: &Game) -> Vec<PushByPos> {
         let mut solution = Vec::new();
         let mut current_game = final_game.clone();
         let mut current_hash = self.zobrist.compute_hash(&current_game);
@@ -313,13 +319,17 @@ impl<H: Heuristic, T: Tracer, S: SearchHelper> Searcher<H, T, S> {
 
                 // Check if this matches the parent we're looking for
                 if prev_hash == target_parent_hash {
-                    solution.push(MoveByPos {
+                    solution.push(PushByPos {
                         box_pos: if self.helper.is_forwards_search() {
                             new_box_pos
                         } else {
                             old_box_pos
                         },
-                        direction: unmove.direction(),
+                        direction: if self.helper.is_forwards_search() {
+                            unmove.direction()
+                        } else {
+                            unmove.direction().reverse()
+                        },
                     });
                     current_hash = prev_hash;
                     found = true;
@@ -440,6 +450,13 @@ impl<H: Heuristic, T: Tracer> Solver<H, T> {
         }
     }
 
+    pub fn nodes_explored(&self) -> (usize, usize) {
+        (
+            self.forwards.nodes_explored(),
+            self.backwards.nodes_explored(),
+        )
+    }
+
     // Implements bidirectional search. Note that this implementation does not
     // guarantee optimal solution paths in general. This is because the A*
     // search going from either end is not guaranteed to explore the states in
@@ -485,34 +502,27 @@ impl<H: Heuristic, T: Tracer> Solver<H, T> {
         }
     }
 
-    fn reconstruct_solution(&self, game: &Game) -> Vec<MoveByPos> {
+    fn reconstruct_solution(&self, game: &Game) -> Vec<Push> {
         let mut forwards_soln = self.forwards.reconstruct_solution(&game);
         let mut backwards_soln = self.backwards.reconstruct_solution(&game);
         backwards_soln.reverse();
         forwards_soln.extend_from_slice(&backwards_soln);
-        self.verify_solution(&forwards_soln);
-        forwards_soln
+        self.remap_solution(&forwards_soln)
     }
 
-    pub fn nodes_explored(&self) -> (usize, usize) {
-        (
-            self.forwards.nodes_explored(),
-            self.backwards.nodes_explored(),
-        )
-    }
-
-    fn verify_solution(&self, solution: &[MoveByPos]) {
+    fn remap_solution(&self, solution: &[PushByPos]) -> Vec<Push> {
         let mut test_game = (*self.forwards.initial_game).clone();
+        let mut soln = Vec::new();
 
-        for (i, push) in solution.iter().enumerate() {
+        for (i, push_by_pos) in solution.iter().enumerate() {
             // Get box index at this position
             let box_index = test_game
-                .box_at(push.box_pos.0, push.box_pos.1)
+                .box_at(push_by_pos.box_pos.0, push_by_pos.box_pos.1)
                 .unwrap_or_else(|| {
                     panic!(
                         "Solution verification failed: no box at position ({}, {}) for push {}",
-                        push.box_pos.0,
-                        push.box_pos.1,
+                        push_by_pos.box_pos.0,
+                        push_by_pos.box_pos.1,
                         i + 1
                     )
                 });
@@ -521,18 +531,19 @@ impl<H: Heuristic, T: Tracer> Solver<H, T> {
             let (valid_pushes, _canonical_pos) = test_game.compute_pushes();
 
             // Verify that this push is among the valid pushes
-            let index_push = Push::new(box_index, push.direction);
+            let push = Push::new(box_index, push_by_pos.direction);
             assert!(
-                valid_pushes.contains(index_push),
+                valid_pushes.contains(push),
                 "Solution verification failed: push {} (box at ({}, {}), direction {:?}) is not valid",
                 i + 1,
-                push.box_pos.0,
-                push.box_pos.1,
-                push.direction
+                push_by_pos.box_pos.0,
+                push_by_pos.box_pos.1,
+                push_by_pos.direction
             );
 
             // Apply the push
-            test_game.push_by_pos(*push);
+            test_game.push(push);
+            soln.push(push);
         }
 
         // Verify final state is solved
@@ -541,6 +552,8 @@ impl<H: Heuristic, T: Tracer> Solver<H, T> {
             "Solution verification failed: after {} pushes, puzzle is not solved",
             solution.len()
         );
+
+        soln
     }
 }
 
@@ -560,13 +573,13 @@ mod tests {
         let result = solver.solve();
 
         assert!(matches!(result, SolveResult::Solved(_)));
-        if let SolveResult::Solved(moves) = result {
-            assert_eq!(moves.len(), 1);
+        if let SolveResult::Solved(soln) = result {
+            assert_eq!(soln.len(), 1);
 
             // Verify solution works
             let mut test_game = Game::from_text(input).unwrap();
-            for push in moves {
-                test_game.push_by_pos(push);
+            for push in soln {
+                test_game.push(push);
             }
             assert!(test_game.is_solved());
         }
@@ -597,13 +610,13 @@ mod tests {
         let result = solver.solve();
 
         assert!(matches!(result, SolveResult::Solved(_)));
-        if let SolveResult::Solved(moves) = result {
-            assert_eq!(moves.len(), 2);
+        if let SolveResult::Solved(soln) = result {
+            assert_eq!(soln.len(), 2);
 
             // Verify solution works
             let mut test_game = Game::from_text(input).unwrap();
-            for push in moves {
-                test_game.push_by_pos(push);
+            for push in soln {
+                test_game.push(push);
             }
             assert!(test_game.is_solved());
         }

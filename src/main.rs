@@ -7,13 +7,16 @@ mod solver;
 mod zobrist;
 
 use clap::{Parser, ValueEnum};
-use game::{Game, MoveByPos};
+use game::Game;
 use heuristic::{GreedyHeuristic, Heuristic, NullHeuristic};
 use levels::Levels;
 use solver::{SearchType, SolveResult, Solver};
 use std::{cell::Cell, time::Instant};
 
-use crate::{game::Move, solver::Tracer};
+use crate::{
+    game::{Move, Push},
+    solver::Tracer,
+};
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
 enum HeuristicType {
@@ -38,17 +41,24 @@ impl From<Direction> for SearchType {
     }
 }
 
-fn print_solution(game: &Game, solution: &[MoveByPos]) {
+fn print_solution(game: &Game, solution: &[Push]) {
     println!("\nStarting position:\n{}", game);
     let mut game = game.clone();
     let mut count = 0;
     let total = solution.len();
     for push in solution {
-        game.push_by_pos(*push);
+        let (box_x, box_y) = game.box_pos(push.box_index() as usize);
+        game.push(*push);
         count += 1;
         println!(
-            "Push crate ({}, {}) {} ({}/{}):\n{}",
-            push.box_pos.0, push.box_pos.1, push.direction, count, total, game
+            "Push crate #{} ({}, {}) {} ({}/{}):\n{}",
+            push.box_index() + 1,
+            box_x,
+            box_y,
+            push.direction(),
+            count,
+            total,
+            game
         );
     }
 }

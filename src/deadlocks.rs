@@ -49,7 +49,7 @@ impl Frozen {
     }
 
     fn is_frozen_dir(&mut self, game: &Game, x: u8, y: u8, dir: Direction) -> bool {
-        if let Some((nx, ny)) = game.push_pos(x, y, dir) {
+        if let Some((nx, ny)) = game.move_position(x, y, dir) {
             self.is_frozen(game, nx, ny)
         } else {
             true
