@@ -1,6 +1,6 @@
 use crate::bits::{Bitvector, BitvectorIter, LazyBitboard};
 use arrayvec::ArrayVec;
-use std::fmt;
+use std::{fmt, marker::PhantomData};
 
 pub const MAX_SIZE: usize = 64;
 pub const MAX_BOXES: usize = 64;
@@ -74,10 +74,74 @@ impl fmt::Display for Direction {
     }
 }
 
+pub trait Move {
+    fn new(box_index: u8, direction: Direction) -> Self;
+    fn box_index(&self) -> u8;
+    fn direction(&self) -> Direction;
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub struct Move {
-    pub box_index: u8,
-    pub direction: Direction,
+pub struct Push {
+    box_index: u8,
+    direction: Direction,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub struct Pull {
+    box_index: u8,
+    direction: Direction,
+}
+
+impl Push {
+    pub fn to_pull(&self) -> Pull {
+        Pull {
+            box_index: self.box_index,
+            direction: self.direction,
+        }
+    }
+}
+
+impl Pull {
+    pub fn to_push(&self) -> Push {
+        Push {
+            box_index: self.box_index,
+            direction: self.direction,
+        }
+    }
+}
+
+impl Move for Push {
+    fn new(box_index: u8, direction: Direction) -> Self {
+        Self {
+            box_index,
+            direction,
+        }
+    }
+
+    fn box_index(&self) -> u8 {
+        self.box_index
+    }
+
+    fn direction(&self) -> Direction {
+        self.direction
+    }
+}
+
+impl Move for Pull {
+    fn new(box_index: u8, direction: Direction) -> Self {
+        Self {
+            box_index,
+            direction,
+        }
+    }
+
+    fn box_index(&self) -> u8 {
+        self.box_index
+    }
+
+    fn direction(&self) -> Direction {
+        self.direction
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -87,16 +151,18 @@ pub struct MoveByPos {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Moves {
+pub struct Moves<T> {
     // Bitset: bits[0] = Up, bits[1] = Down, bits[2] = Left, bits[3] = Right
     // Each Bitvector holds 64 bits for 64 boxes (box indices 0-63)
     bits: [Bitvector; 4],
+    phantom: PhantomData<T>,
 }
 
-impl Moves {
+impl<T: Move> Moves<T> {
     fn new() -> Self {
         Moves {
             bits: [Bitvector::new(); 4],
+            phantom: PhantomData,
         }
     }
 
@@ -120,37 +186,54 @@ impl Moves {
         self.boxes().is_empty()
     }
 
-    pub fn contains(&self, push: Move) -> bool {
-        let dir_idx = push.direction.index();
-        self.bits[dir_idx].contains(push.box_index)
+    pub fn contains(&self, move_: T) -> bool {
+        let dir_idx = move_.direction().index();
+        self.bits[dir_idx].contains(move_.box_index())
     }
 
-    pub fn iter(&self) -> MovesIter {
+    pub fn iter(&self) -> MovesIter<T> {
         MovesIter {
             bits: self.bits,
             dir_idx: 0,
             current_iter: self.bits[0].iter(),
+            phantom: PhantomData,
         }
     }
 }
 
-pub struct MovesIter {
+impl Moves<Push> {
+    pub fn to_pulls(&self) -> Moves<Pull> {
+        Moves {
+            bits: self.bits,
+            phantom: PhantomData,
+        }
+    }
+}
+
+impl Moves<Pull> {
+    pub fn to_pushes(&self) -> Moves<Push> {
+        Moves {
+            bits: self.bits,
+            phantom: PhantomData,
+        }
+    }
+}
+
+pub struct MovesIter<T> {
     bits: [Bitvector; 4],
     dir_idx: usize,
     current_iter: BitvectorIter,
+    phantom: PhantomData<T>,
 }
 
-impl Iterator for MovesIter {
-    type Item = Move;
+impl<T: Move> Iterator for MovesIter<T> {
+    type Item = T;
 
     fn next(&mut self) -> Option<Self::Item> {
         loop {
             if let Some(box_index) = self.current_iter.next() {
                 let direction = Direction::from_index(self.dir_idx);
-                return Some(Move {
-                    box_index,
-                    direction,
-                });
+                return Some(T::new(box_index, direction));
             }
 
             // Move to next direction
@@ -163,9 +246,9 @@ impl Iterator for MovesIter {
     }
 }
 
-impl IntoIterator for &'_ Moves {
-    type Item = Move;
-    type IntoIter = MovesIter;
+impl<T: Move> IntoIterator for &'_ Moves<T> {
+    type Item = T;
+    type IntoIter = MovesIter<T>;
 
     fn into_iter(self) -> Self::IntoIter {
         self.iter()
@@ -415,7 +498,7 @@ impl Game {
     /// Pushes a box.
     /// Updates the player position to where the box was.
     /// Panics if the push is invalid (invalid box index, destination blocked, etc.)
-    pub fn push(&mut self, push: Move) {
+    pub fn push(&mut self, push: Push) {
         assert!(
             (push.box_index as usize) < self.boxes.count as usize,
             "Invalid box index: {}",
@@ -460,13 +543,13 @@ impl Game {
             .box_at(x, y)
             .unwrap_or_else(|| panic!("No box at position ({}, {})", x, y));
 
-        self.push(Move {
+        self.push(Push {
             box_index,
             direction: push.direction,
         });
     }
 
-    pub fn pull(&mut self, pull: Move) {
+    pub fn pull(&mut self, pull: Pull) {
         assert!(
             (pull.box_index as usize) < self.boxes.count as usize,
             "Invalid box index: {}",
@@ -561,7 +644,7 @@ impl Game {
     /// Returns the pushes and the canonicalized (lexicographically smallest) player position.
     /// If the game is already solved, returns empty pushes and Unknown player position.
     /// Panics if the player position is Unknown (and game is not solved).
-    pub fn compute_pushes(&self) -> (Moves, PlayerPos) {
+    pub fn compute_pushes(&self) -> (Moves<Push>, PlayerPos) {
         let mut visited = LazyBitboard::new();
         let mut boxes = Bitvector::new();
         self.compute_pushes_helper(&mut visited, &mut boxes)
@@ -571,7 +654,7 @@ impl Game {
         &self,
         visited: &mut LazyBitboard,
         boxes: &mut Bitvector,
-    ) -> (Moves, PlayerPos) {
+    ) -> (Moves<Push>, PlayerPos) {
         // We don't report moves when the game is solved.
         if self.is_solved() {
             return (Moves::new(), PlayerPos::Unknown);
@@ -593,7 +676,7 @@ impl Game {
         (pushes, PlayerPos::Known(canonical_pos.0, canonical_pos.1))
     }
 
-    pub fn compute_pi_corral_pushes(&self) -> (Moves, PlayerPos) {
+    pub fn compute_pi_corral_pushes(&self) -> (Moves<Push>, PlayerPos) {
         let mut player_reachable = LazyBitboard::new();
         let mut player_reachable_boxes = Bitvector::new();
         let mut corrals_visited = LazyBitboard::new();
@@ -641,7 +724,7 @@ impl Game {
         player_reachable: &LazyBitboard,
         player_reachable_boxes: Bitvector,
         corrals_visited: &mut LazyBitboard,
-    ) -> Option<(Moves, usize)> {
+    ) -> Option<(Moves<Push>, usize)> {
         assert!(!player_reachable.get(x, y));
 
         let mut stack: ArrayVec<(u8, u8), { MAX_SIZE * MAX_SIZE }> = ArrayVec::new();
@@ -736,7 +819,7 @@ impl Game {
     /// Returns the pulls and the canonicalized (lexicographically smallest) player position.
     /// If player position is Unknown, computes pulls from all possible player positions
     /// and returns Unknown as the canonical position.
-    pub fn compute_pulls(&self) -> (Moves, PlayerPos) {
+    pub fn compute_pulls(&self) -> (Moves<Pull>, PlayerPos) {
         let mut pulls = Moves::new();
         let mut visited = LazyBitboard::new();
 
@@ -772,7 +855,7 @@ impl Game {
         &self,
         player: (u8, u8),
         visited: &mut LazyBitboard,
-        pulls: &mut Moves,
+        pulls: &mut Moves<Pull>,
     ) -> (u8, u8) {
         self.player_dfs(player, visited, |(x, y), dir, box_idx| {
             if let Some((dest_x, dest_y)) = self.pull_pos(x, y, dir) {
@@ -1014,7 +1097,7 @@ mod tests {
 
         // Push box right (box at position (2,1) is box index 0)
         let box_idx = game.boxes.index[1][2];
-        game.push(Move {
+        game.push(Push {
             box_index: box_idx,
             direction: Direction::Right,
         });
@@ -1041,7 +1124,7 @@ mod tests {
                      ####";
         let mut game = Game::from_text(input).unwrap();
         let box_idx = game.boxes.index[1][2];
-        game.push(Move {
+        game.push(Push {
             box_index: box_idx,
             direction: Direction::Right,
         });
@@ -1056,7 +1139,7 @@ mod tests {
                      #####";
         let mut game = Game::from_text(input).unwrap();
         let box_idx = game.boxes.index[2][2];
-        game.push(Move {
+        game.push(Push {
             box_index: box_idx,
             direction: Direction::Down,
         });
@@ -1071,7 +1154,7 @@ mod tests {
                      ####";
         let mut game = Game::from_text(input).unwrap();
         let box_idx = game.boxes.index[1][2];
-        game.push(Move {
+        game.push(Push {
             box_index: box_idx,
             direction: Direction::Left,
         });
@@ -1086,7 +1169,7 @@ mod tests {
                      #####";
         let mut game = Game::from_text(input).unwrap();
         let box_idx = game.boxes.index[2][2];
-        game.push(Move {
+        game.push(Push {
             box_index: box_idx,
             direction: Direction::Up,
         });
@@ -1105,7 +1188,7 @@ mod tests {
 
         assert_eq!(game.empty_goals, 1);
         let box_idx = game.boxes.index[1][2];
-        game.push(Move {
+        game.push(Push {
             box_index: box_idx,
             direction: Direction::Right,
         });
@@ -1128,7 +1211,7 @@ mod tests {
         assert!(game.boxes.has_box_at(2, 1));
 
         let box_idx = game.boxes.index[1][2];
-        game.push(Move {
+        game.push(Push {
             box_index: box_idx,
             direction: Direction::Right,
         });
@@ -1151,7 +1234,7 @@ mod tests {
 
         assert_eq!(game.empty_goals, 1);
         let box_idx = game.boxes.index[1][2];
-        game.push(Move {
+        game.push(Push {
             box_index: box_idx,
             direction: Direction::Right,
         });
@@ -1172,7 +1255,7 @@ mod tests {
         let mut game = Game::from_text(input).unwrap();
 
         // Try to push with invalid box index
-        game.push(Move {
+        game.push(Push {
             box_index: 10,
             direction: Direction::Right,
         });
@@ -1189,7 +1272,7 @@ mod tests {
 
         // Try to push box into wall
         let box_idx = game.boxes.index[1][2];
-        game.push(Move {
+        game.push(Push {
             box_index: box_idx,
             direction: Direction::Right,
         });
@@ -1206,7 +1289,7 @@ mod tests {
 
         // Try to push box into another box
         let box_idx = game.boxes.index[1][2];
-        game.push(Move {
+        game.push(Push {
             box_index: box_idx,
             direction: Direction::Right,
         });
@@ -1225,19 +1308,19 @@ mod tests {
         let (pushes, canonical_pos) = game.compute_pushes();
         let mut actual = pushes.iter().collect::<Vec<_>>();
         let mut expected = vec![
-            Move {
+            Push {
                 box_index: 0,
                 direction: Direction::Up,
             },
-            Move {
+            Push {
                 box_index: 0,
                 direction: Direction::Down,
             },
-            Move {
+            Push {
                 box_index: 1,
                 direction: Direction::Left,
             },
-            Move {
+            Push {
                 box_index: 1,
                 direction: Direction::Right,
             },
@@ -1263,7 +1346,7 @@ mod tests {
         let actual = pulls.iter().collect::<Vec<_>>();
         assert_eq!(
             actual,
-            vec![Move {
+            vec![Pull {
                 box_index: 0,
                 direction: Direction::Left
             }]
@@ -1282,11 +1365,11 @@ mod tests {
         actual.sort();
 
         let mut expected = vec![
-            Move {
+            Pull {
                 box_index: 0,
                 direction: Direction::Left,
             },
-            Move {
+            Pull {
                 box_index: 0,
                 direction: Direction::Right,
             },
@@ -1311,7 +1394,7 @@ mod tests {
 
         // Push box right
         let box_idx = game.boxes.index[1][2];
-        let push = Move {
+        let push = Push {
             box_index: box_idx,
             direction: Direction::Right,
         };
@@ -1324,7 +1407,7 @@ mod tests {
         assert!(game.is_solved());
 
         // Pull
-        game.pull(push);
+        game.pull(push.to_pull());
 
         // Should be back to original state
         assert_eq!(game.player, original_player);
@@ -1351,13 +1434,13 @@ mod tests {
             let box_idx = game.boxes.positions[0];
             let box_idx = game.boxes.index[box_idx.1 as usize][box_idx.0 as usize];
 
-            let push = Move {
+            let push = Push {
                 box_index: box_idx,
                 direction,
             };
 
             game.push(push);
-            game.pull(push);
+            game.pull(push.to_pull());
 
             assert_eq!(game.player, original.player, "Failed for {:?}", direction);
             assert_eq!(game.boxes, original.boxes, "Failed for {:?}", direction);
@@ -1527,7 +1610,7 @@ mod tests {
         Game::from_text(text.trim_matches('\n')).unwrap()
     }
 
-    fn check_pi_corral(game: &Game, x: u8, y: u8, expected_result: Option<(Moves, usize)>) {
+    fn check_pi_corral(game: &Game, x: u8, y: u8, expected_result: Option<(Moves<Push>, usize)>) {
         let mut player_reachable = LazyBitboard::new();
         let mut player_reachable_boxes: Bitvector = Bitvector::new();
         let mut corrals_visited = LazyBitboard::new();

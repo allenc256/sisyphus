@@ -1,5 +1,5 @@
 use crate::deadlocks::Deadlocks;
-use crate::game::{Game, Move, MoveByPos, Moves, PlayerPos};
+use crate::game::{Game, Move, MoveByPos, Moves, PlayerPos, Pull, Push};
 use crate::heuristic::{Cost, Heuristic};
 use crate::zobrist::Zobrist;
 use std::collections::HashMap;
@@ -37,7 +37,7 @@ struct TableEntry {
 }
 
 /// Performs A* search up to a specified threshold
-struct Searcher<H: Heuristic, T: Tracer> {
+struct Searcher<H: Heuristic, T: Tracer, S: SearchHelper> {
     nodes_explored: usize,
     max_nodes_explored: usize,
     table: HashMap<u64, TableEntry>, // Transposition table mapping state hash to entry
@@ -48,9 +48,24 @@ struct Searcher<H: Heuristic, T: Tracer> {
     initial_hash: u64,
     initial_boxes_hash: u64,
     freeze_deadlocks: bool,
-    pi_corrals: bool,
     tracer: Option<Rc<T>>,
+    helper: S,
 }
+
+trait SearchHelper {
+    type Move: Move;
+
+    fn compute_moves(&self, game: &Game) -> (Moves<Self::Move>, PlayerPos);
+    fn compute_unmoves(&self, game: &Game) -> Moves<Self::Move>;
+    fn apply_move(&self, game: &mut Game, move_: &Self::Move);
+    fn unapply_move(&self, game: &mut Game, move_: &Self::Move);
+}
+
+struct ForwardsSearchHelper {
+    pi_corrals: bool,
+}
+
+struct BackwardsSearchHelper;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SearchDirection {
@@ -67,24 +82,24 @@ pub enum SearchType {
 
 /// Manages iterative deepening A* by repeatedly calling Searcher with increasing thresholds
 pub struct Solver<H: Heuristic, T: Tracer> {
-    forwards: Searcher<H, T>,
-    backwards: Searcher<H, T>,
+    forwards: Searcher<H, T, ForwardsSearchHelper>,
+    backwards: Searcher<H, T, BackwardsSearchHelper>,
     search_type: SearchType,
 }
 
 pub trait Tracer {
-    fn trace_move(
+    fn trace_move<M: Move>(
         &self,
         search_dir: SearchDirection,
         game: &Game,
         threshold: usize,
         f_cost: usize,
         g_cost: usize,
-        move_: Move,
+        move_: &M,
     );
 }
 
-impl<H: Heuristic, T: Tracer> Searcher<H, T> {
+impl<H: Heuristic, T: Tracer, S: SearchHelper> Searcher<H, T, S> {
     fn new(
         zobrist: Rc<Zobrist>,
         max_nodes_explored: usize,
@@ -92,14 +107,13 @@ impl<H: Heuristic, T: Tracer> Searcher<H, T> {
         direction: SearchDirection,
         initial_game: Rc<Game>,
         freeze_deadlocks: bool,
-        pi_corrals: bool,
         tracer: Option<Rc<T>>,
+        helper: S,
     ) -> Self {
         let initial_hash = zobrist.compute_hash(&initial_game);
         let initial_boxes_hash = zobrist.compute_boxes_hash(&initial_game);
         // Only check freeze deadlocks and PI-corrals for forward search
         let freeze_deadlocks = freeze_deadlocks && direction == SearchDirection::Forwards;
-        let pi_corrals = pi_corrals && direction == SearchDirection::Forwards;
         let mut searcher = Searcher {
             nodes_explored: 0,
             max_nodes_explored,
@@ -111,8 +125,8 @@ impl<H: Heuristic, T: Tracer> Searcher<H, T> {
             initial_hash,
             initial_boxes_hash,
             freeze_deadlocks,
-            pi_corrals,
             tracer,
+            helper,
         };
         searcher.reset();
         searcher
@@ -190,7 +204,7 @@ impl<H: Heuristic, T: Tracer> Searcher<H, T> {
         }
 
         // Get all valid pushes and canonical position
-        let (moves, canonical_pos) = self.compute_moves(game);
+        let (moves, canonical_pos) = self.helper.compute_moves(game);
 
         // Hash in the canonical player position
         let curr_hash = boxes_hash ^ self.zobrist.player_hash(canonical_pos);
@@ -221,18 +235,18 @@ impl<H: Heuristic, T: Tracer> Searcher<H, T> {
 
         // Try each push
         for move_ in &moves {
-            let old_box_pos = game.box_pos(move_.box_index as usize);
-            self.apply_move(game, move_);
-            let new_box_pos = game.box_pos(move_.box_index as usize);
+            let old_box_pos = game.box_pos(move_.box_index() as usize);
+            self.helper.apply_move(game, &move_);
+            let new_box_pos = game.box_pos(move_.box_index() as usize);
 
             if let Some(tracer) = &self.tracer {
-                tracer.trace_move(self.direction, game, threshold, f_cost, g_cost, move_);
+                tracer.trace_move(self.direction, game, threshold, f_cost, g_cost, &move_);
             }
 
             if self.freeze_deadlocks
                 && Deadlocks::is_freeze_deadlock(game, new_box_pos.0, new_box_pos.1)
             {
-                self.unapply_move(game, move_);
+                self.helper.unapply_move(game, &move_);
                 continue;
             }
 
@@ -253,7 +267,7 @@ impl<H: Heuristic, T: Tracer> Searcher<H, T> {
                 return child_result;
             }
 
-            self.unapply_move(game, move_);
+            self.helper.unapply_move(game, &move_);
 
             if child_result == SearchResult::Cutoff {
                 return child_result;
@@ -286,14 +300,14 @@ impl<H: Heuristic, T: Tracer> Searcher<H, T> {
             let target_parent_hash = entry.parent_hash;
 
             // Compute all possible unmoves from current state
-            let (unmoves, _canonical_pos) = self.compute_unmoves(&current_game);
+            let unmoves = self.helper.compute_unmoves(&current_game);
 
             // Try each unmove to find which one leads to parent state
             let mut found = false;
             for unmove in &unmoves {
-                let old_box_pos = current_game.box_pos(unmove.box_index as usize);
-                self.unapply_move(&mut current_game, unmove);
-                let new_box_pos = current_game.box_pos(unmove.box_index as usize);
+                let old_box_pos = current_game.box_pos(unmove.box_index() as usize);
+                self.helper.unapply_move(&mut current_game, &unmove);
+                let new_box_pos = current_game.box_pos(unmove.box_index() as usize);
 
                 // Compute hash of this previous state
                 let prev_hash = self.zobrist.compute_hash(&current_game);
@@ -305,7 +319,7 @@ impl<H: Heuristic, T: Tracer> Searcher<H, T> {
                             SearchDirection::Forwards => new_box_pos,
                             SearchDirection::Backwards => old_box_pos,
                         },
-                        direction: unmove.direction,
+                        direction: unmove.direction(),
                     });
                     current_hash = prev_hash;
                     found = true;
@@ -313,7 +327,7 @@ impl<H: Heuristic, T: Tracer> Searcher<H, T> {
                 }
 
                 // Redo the unmove if it wasn't correct
-                self.apply_move(&mut current_game, unmove);
+                self.helper.apply_move(&mut current_game, &unmove);
             }
 
             assert!(
@@ -332,39 +346,49 @@ impl<H: Heuristic, T: Tracer> Searcher<H, T> {
             SearchDirection::Backwards => self.heuristic.compute_backward(game),
         }
     }
+}
 
-    fn compute_moves(&self, game: &Game) -> (Moves, PlayerPos) {
-        match self.direction {
-            SearchDirection::Forwards => {
-                if self.pi_corrals {
-                    game.compute_pi_corral_pushes()
-                } else {
-                    game.compute_pushes()
-                }
-            }
-            SearchDirection::Backwards => game.compute_pulls(),
+impl SearchHelper for ForwardsSearchHelper {
+    type Move = Push;
+
+    fn compute_moves(&self, game: &Game) -> (Moves<Push>, PlayerPos) {
+        if self.pi_corrals {
+            game.compute_pi_corral_pushes()
+        } else {
+            game.compute_pushes()
         }
     }
 
-    fn compute_unmoves(&self, game: &Game) -> (Moves, PlayerPos) {
-        match self.direction {
-            SearchDirection::Forwards => game.compute_pulls(),
-            SearchDirection::Backwards => game.compute_pushes(),
-        }
+    fn compute_unmoves(&self, game: &Game) -> Moves<Push> {
+        game.compute_pulls().0.to_pushes()
     }
 
-    fn apply_move(&self, game: &mut Game, move_: Move) {
-        match self.direction {
-            SearchDirection::Forwards => game.push(move_),
-            SearchDirection::Backwards => game.pull(move_),
-        }
+    fn apply_move(&self, game: &mut Game, push: &Push) {
+        game.push(*push);
     }
 
-    fn unapply_move(&self, game: &mut Game, move_: Move) {
-        match self.direction {
-            SearchDirection::Forwards => game.pull(move_),
-            SearchDirection::Backwards => game.push(move_),
-        }
+    fn unapply_move(&self, game: &mut Game, push: &Push) {
+        game.pull(push.to_pull());
+    }
+}
+
+impl SearchHelper for BackwardsSearchHelper {
+    type Move = Pull;
+
+    fn compute_moves(&self, game: &Game) -> (Moves<Pull>, PlayerPos) {
+        game.compute_pulls()
+    }
+
+    fn compute_unmoves(&self, game: &Game) -> Moves<Pull> {
+        game.compute_pushes().0.to_pulls()
+    }
+
+    fn apply_move(&self, game: &mut Game, pull: &Pull) {
+        game.pull(*pull)
+    }
+
+    fn unapply_move(&self, game: &mut Game, pull: &Pull) {
+        game.push(pull.to_push())
     }
 }
 
@@ -392,8 +416,8 @@ impl<H: Heuristic, T: Tracer> Solver<H, T> {
                 SearchDirection::Forwards,
                 forwards_game,
                 freeze_deadlocks,
-                pi_corrals,
                 tracer.clone(),
+                ForwardsSearchHelper { pi_corrals },
             ),
             backwards: Searcher::new(
                 zobrist,
@@ -402,8 +426,8 @@ impl<H: Heuristic, T: Tracer> Solver<H, T> {
                 SearchDirection::Backwards,
                 backwards_game,
                 freeze_deadlocks,
-                pi_corrals,
                 tracer,
+                BackwardsSearchHelper,
             ),
             search_type,
         }
@@ -428,41 +452,39 @@ impl<H: Heuristic, T: Tracer> Solver<H, T> {
                 }
             };
 
-            let (active, inactive) = if is_forwards {
-                (&mut self.forwards, &mut self.backwards)
-            } else {
-                (&mut self.backwards, &mut self.forwards)
-            };
-
-            let threshold = if is_forwards {
-                &mut forwards_threshold
-            } else {
-                &mut backwards_threshold
-            };
-
-            match active.search(*threshold, &|hash| inactive.table.contains_key(&hash)) {
-                SearchResult::Solved(final_game) => {
-                    let (mut forwards_soln, mut backwards_soln) = if is_forwards {
-                        (
-                            active.reconstruct_solution(&final_game),
-                            inactive.reconstruct_solution(&final_game),
-                        )
-                    } else {
-                        (
-                            inactive.reconstruct_solution(&final_game),
-                            active.reconstruct_solution(&final_game),
-                        )
-                    };
-                    backwards_soln.reverse();
-                    forwards_soln.extend_from_slice(&backwards_soln);
-                    self.verify_solution(&forwards_soln);
-                    return SolveResult::Solved(forwards_soln);
+            if is_forwards {
+                match self.forwards.search(forwards_threshold, &|hash| {
+                    self.backwards.table.contains_key(&hash)
+                }) {
+                    SearchResult::Solved(game) => {
+                        return SolveResult::Solved(self.reconstruct_solution(&game));
+                    }
+                    SearchResult::Exceeded => forwards_threshold += 1,
+                    SearchResult::Cutoff => return SolveResult::Cutoff,
+                    SearchResult::Impossible => return SolveResult::Impossible,
                 }
-                SearchResult::Exceeded => *threshold += 1,
-                SearchResult::Cutoff => return SolveResult::Cutoff,
-                SearchResult::Impossible => return SolveResult::Impossible,
+            } else {
+                match self.backwards.search(backwards_threshold, &|hash| {
+                    self.forwards.table.contains_key(&hash)
+                }) {
+                    SearchResult::Solved(game) => {
+                        return SolveResult::Solved(self.reconstruct_solution(&game));
+                    }
+                    SearchResult::Exceeded => backwards_threshold += 1,
+                    SearchResult::Cutoff => return SolveResult::Cutoff,
+                    SearchResult::Impossible => return SolveResult::Impossible,
+                }
             }
         }
+    }
+
+    fn reconstruct_solution(&self, game: &Game) -> Vec<MoveByPos> {
+        let mut forwards_soln = self.forwards.reconstruct_solution(&game);
+        let mut backwards_soln = self.backwards.reconstruct_solution(&game);
+        backwards_soln.reverse();
+        forwards_soln.extend_from_slice(&backwards_soln);
+        self.verify_solution(&forwards_soln);
+        forwards_soln
     }
 
     pub fn nodes_explored(&self) -> (usize, usize) {
@@ -492,10 +514,7 @@ impl<H: Heuristic, T: Tracer> Solver<H, T> {
             let (valid_pushes, _canonical_pos) = test_game.compute_pushes();
 
             // Verify that this push is among the valid pushes
-            let index_push = Move {
-                box_index,
-                direction: push.direction,
-            };
+            let index_push = Push::new(box_index, push.direction);
             assert!(
                 valid_pushes.contains(index_push),
                 "Solution verification failed: push {} (box at ({}, {}), direction {:?}) is not valid",
@@ -597,14 +616,14 @@ mod tests {
     struct NullTracer {}
 
     impl Tracer for NullTracer {
-        fn trace_move(
+        fn trace_move<M: Move>(
             &self,
             _search_dir: SearchDirection,
             _game: &Game,
             _threshold: usize,
             _f_cost: usize,
             _g_cost: usize,
-            _move: Move,
+            _move: &M,
         ) {
             unreachable!()
         }
