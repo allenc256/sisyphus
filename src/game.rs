@@ -460,17 +460,13 @@ impl Game {
 
     /// Get the box index at the given position, if any.
     /// Returns Some(box_index) if there is a box at the position, None otherwise.
-    pub fn box_at(&self, pos: Position) -> Option<BoxIndex> {
+    pub fn box_index(&self, pos: Position) -> Option<BoxIndex> {
         let idx = self.boxes.index[pos.1 as usize][pos.0 as usize];
         if idx == NO_BOX { None } else { Some(idx) }
     }
 
     /// Get the position of a box given its index.
     pub fn box_position(&self, box_index: BoxIndex) -> Position {
-        assert!(
-            (box_index.0 as usize) < self.boxes.positions.len(),
-            "Invalid box index"
-        );
         self.boxes.positions[box_index.0 as usize]
     }
 
@@ -705,7 +701,7 @@ impl Game {
             let is_goal = self.get_tile(curr_pos) == Tile::Goal;
 
             // We've hit a box
-            if let Some(box_idx) = self.box_at(curr_pos) {
+            if let Some(box_idx) = self.box_index(curr_pos) {
                 // Box not on goal: corral requires pushes to solve the puzzle
                 if !is_goal {
                     can_prune = true;
@@ -858,7 +854,7 @@ impl Game {
             for &dir in &ALL_DIRECTIONS {
                 if let Some(next_pos) = self.move_position(pos, dir) {
                     // If there's a box, notify the closure
-                    if let Some(box_idx) = self.box_at(next_pos) {
+                    if let Some(box_idx) = self.box_index(next_pos) {
                         on_box(pos, dir, box_idx);
                     } else {
                         let tile = self.get_tile(next_pos);

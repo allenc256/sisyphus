@@ -23,7 +23,7 @@ impl Frozen {
     }
 
     fn is_deadlocked(&mut self, game: &Game, pos: Position) -> bool {
-        assert!(game.box_at(pos).is_some());
+        assert!(game.box_index(pos).is_some());
         self.is_frozen(game, pos) && self.deadlocked
     }
 
@@ -31,7 +31,7 @@ impl Frozen {
         if game.get_tile(pos) == Tile::Wall {
             return true;
         }
-        if game.box_at(pos).is_none() {
+        if game.box_index(pos).is_none() {
             return false;
         }
         if self.visited.get(pos.0, pos.1) {

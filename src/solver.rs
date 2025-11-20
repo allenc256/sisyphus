@@ -485,7 +485,7 @@ impl<H: Heuristic, T: Tracer> Solver<H, T> {
 
         for (i, push_by_pos) in forward_soln.iter().chain(reverse_soln.iter()).enumerate() {
             // Get box index at this position
-            let box_index = test_game.box_at(push_by_pos.box_pos).unwrap_or_else(|| {
+            let box_index = test_game.box_index(push_by_pos.box_pos).unwrap_or_else(|| {
                 panic!(
                     "Solution verification failed: no box at position {} for push {}",
                     push_by_pos.box_pos,
