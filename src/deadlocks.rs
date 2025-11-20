@@ -1,11 +1,11 @@
 use crate::bits::LazyBitboard;
-use crate::game::{Direction, Game, Tile};
+use crate::game::{Direction, Game, Position, Tile};
 
 pub struct Deadlocks {}
 
 impl Deadlocks {
-    pub fn is_freeze_deadlock(game: &Game, x: u8, y: u8) -> bool {
-        Frozen::new().is_deadlocked(game, x, y)
+    pub fn is_freeze_deadlock(game: &Game, pos: Position) -> bool {
+        Frozen::new().is_deadlocked(game, pos)
     }
 }
 
@@ -22,35 +22,35 @@ impl Frozen {
         }
     }
 
-    fn is_deadlocked(&mut self, game: &Game, x: u8, y: u8) -> bool {
-        assert!(game.box_at(x, y).is_some());
-        self.is_frozen(game, x, y) && self.deadlocked
+    fn is_deadlocked(&mut self, game: &Game, pos: Position) -> bool {
+        assert!(game.box_at(pos).is_some());
+        self.is_frozen(game, pos) && self.deadlocked
     }
 
-    fn is_frozen(&mut self, game: &Game, x: u8, y: u8) -> bool {
-        if game.get_tile(x, y) == Tile::Wall {
+    fn is_frozen(&mut self, game: &Game, pos: Position) -> bool {
+        if game.get_tile(pos) == Tile::Wall {
             return true;
         }
-        if game.box_at(x, y).is_none() {
+        if game.box_at(pos).is_none() {
             return false;
         }
-        if self.visited.get(x, y) {
+        if self.visited.get(pos.0, pos.1) {
             return true;
         }
-        self.visited.set(x, y);
-        let is_frozen_box = (self.is_frozen_dir(game, x, y, Direction::Left)
-            || self.is_frozen_dir(game, x, y, Direction::Right))
-            && (self.is_frozen_dir(game, x, y, Direction::Up)
-                || self.is_frozen_dir(game, x, y, Direction::Down));
-        if is_frozen_box && game.get_tile(x, y) != Tile::Goal {
+        self.visited.set(pos.0, pos.1);
+        let is_frozen_box = (self.is_frozen_dir(game, pos, Direction::Left)
+            || self.is_frozen_dir(game, pos, Direction::Right))
+            && (self.is_frozen_dir(game, pos, Direction::Up)
+                || self.is_frozen_dir(game, pos, Direction::Down));
+        if is_frozen_box && game.get_tile(pos) != Tile::Goal {
             self.deadlocked = true;
         }
         is_frozen_box
     }
 
-    fn is_frozen_dir(&mut self, game: &Game, x: u8, y: u8, dir: Direction) -> bool {
-        if let Some((nx, ny)) = game.move_position(x, y, dir) {
-            self.is_frozen(game, nx, ny)
+    fn is_frozen_dir(&mut self, game: &Game, pos: Position, dir: Direction) -> bool {
+        if let Some(next_pos) = game.move_position(pos, dir) {
+            self.is_frozen(game, next_pos)
         } else {
             true
         }

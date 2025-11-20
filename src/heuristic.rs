@@ -1,4 +1,4 @@
-use crate::game::{ALL_DIRECTIONS, Game, MAX_BOXES, MAX_SIZE, Tile};
+use crate::game::{ALL_DIRECTIONS, Game, MAX_BOXES, MAX_SIZE, Position, Tile};
 use std::collections::VecDeque;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -76,30 +76,26 @@ impl GreedyHeuristic {
     }
 
     /// BFS using pulls to compute distances from a goal position
-    fn bfs_pulls(game: &Game, goal_pos: (u8, u8), distances: &mut [[u16; MAX_SIZE]; MAX_SIZE]) {
+    fn bfs_pulls(game: &Game, goal_pos: Position, distances: &mut [[u16; MAX_SIZE]; MAX_SIZE]) {
         let mut queue = VecDeque::new();
-        queue.push_back((goal_pos.0, goal_pos.1));
+        queue.push_back(goal_pos);
         distances[goal_pos.1 as usize][goal_pos.0 as usize] = 0;
 
-        while let Some((box_x, box_y)) = queue.pop_front() {
-            let dist = distances[box_y as usize][box_x as usize];
+        while let Some(box_pos) = queue.pop_front() {
+            let dist = distances[box_pos.1 as usize][box_pos.0 as usize];
 
             for direction in ALL_DIRECTIONS {
-                if let Some((new_box_x, new_box_y)) =
-                    game.move_position(box_x, box_y, direction.reverse())
-                {
-                    if let Some((player_x, player_y)) =
-                        game.move_position(new_box_x, new_box_y, direction.reverse())
-                    {
-                        let new_box_tile = game.get_tile(new_box_x, new_box_y);
-                        let player_tile = game.get_tile(player_x, player_y);
+                if let Some(new_box_pos) = game.move_position(box_pos, direction.reverse()) {
+                    if let Some(player_pos) = game.move_position(new_box_pos, direction.reverse()) {
+                        let new_box_tile = game.get_tile(new_box_pos);
+                        let player_tile = game.get_tile(player_pos);
 
                         if (new_box_tile == Tile::Floor || new_box_tile == Tile::Goal)
                             && (player_tile == Tile::Floor || player_tile == Tile::Goal)
-                            && distances[new_box_y as usize][new_box_x as usize] == u16::MAX
+                            && distances[new_box_pos.1 as usize][new_box_pos.0 as usize] == u16::MAX
                         {
-                            distances[new_box_y as usize][new_box_x as usize] = dist + 1;
-                            queue.push_back((new_box_x, new_box_y));
+                            distances[new_box_pos.1 as usize][new_box_pos.0 as usize] = dist + 1;
+                            queue.push_back(new_box_pos);
                         }
                     }
                 }
@@ -108,28 +104,26 @@ impl GreedyHeuristic {
     }
 
     /// BFS using pushes to compute distances from a box start position
-    fn bfs_pushes(game: &Game, start_pos: (u8, u8), distances: &mut [[u16; MAX_SIZE]; MAX_SIZE]) {
+    fn bfs_pushes(game: &Game, start_pos: Position, distances: &mut [[u16; MAX_SIZE]; MAX_SIZE]) {
         let mut queue = VecDeque::new();
-        queue.push_back((start_pos.0, start_pos.1));
+        queue.push_back(start_pos);
         distances[start_pos.1 as usize][start_pos.0 as usize] = 0;
 
-        while let Some((box_x, box_y)) = queue.pop_front() {
-            let dist = distances[box_y as usize][box_x as usize];
+        while let Some(box_pos) = queue.pop_front() {
+            let dist = distances[box_pos.1 as usize][box_pos.0 as usize];
 
             for direction in ALL_DIRECTIONS {
-                if let Some((new_box_x, new_box_y)) = game.move_position(box_x, box_y, direction) {
-                    if let Some((player_x, player_y)) =
-                        game.move_position(box_x, box_y, direction.reverse())
-                    {
-                        let new_box_tile = game.get_tile(new_box_x, new_box_y);
-                        let player_tile = game.get_tile(player_x, player_y);
+                if let Some(new_box_pos) = game.move_position(box_pos, direction) {
+                    if let Some(player_pos) = game.move_position(box_pos, direction.reverse()) {
+                        let new_box_tile = game.get_tile(new_box_pos);
+                        let player_tile = game.get_tile(player_pos);
 
                         if (new_box_tile == Tile::Floor || new_box_tile == Tile::Goal)
                             && (player_tile == Tile::Floor || player_tile == Tile::Goal)
-                            && distances[new_box_y as usize][new_box_x as usize] == u16::MAX
+                            && distances[new_box_pos.1 as usize][new_box_pos.0 as usize] == u16::MAX
                         {
-                            distances[new_box_y as usize][new_box_x as usize] = dist + 1;
-                            queue.push_back((new_box_x, new_box_y));
+                            distances[new_box_pos.1 as usize][new_box_pos.0 as usize] = dist + 1;
+                            queue.push_back(new_box_pos);
                         }
                     }
                 }

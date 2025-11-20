@@ -1,5 +1,5 @@
 use crate::deadlocks::Deadlocks;
-use crate::game::{Direction, Game, Move, Moves, PlayerPos, Pull, Push};
+use crate::game::{Direction, Game, Move, Moves, PlayerPos, Position, Pull, Push};
 use crate::heuristic::{Cost, Heuristic};
 use crate::zobrist::Zobrist;
 use std::collections::HashMap;
@@ -97,7 +97,7 @@ pub trait Tracer {
 
 #[derive(Debug, Copy, Clone)]
 struct PushByPos {
-    box_pos: (u8, u8),
+    box_pos: Position,
     direction: Direction,
 }
 
@@ -248,9 +248,7 @@ impl<H: Heuristic, T: Tracer, S: SearchHelper> Searcher<H, T, S> {
                 );
             }
 
-            if self.freeze_deadlocks
-                && Deadlocks::is_freeze_deadlock(game, new_box_pos.0, new_box_pos.1)
-            {
+            if self.freeze_deadlocks && Deadlocks::is_freeze_deadlock(game, new_box_pos) {
                 self.helper.unapply_move(game, &move_);
                 continue;
             }
@@ -516,16 +514,13 @@ impl<H: Heuristic, T: Tracer> Solver<H, T> {
 
         for (i, push_by_pos) in solution.iter().enumerate() {
             // Get box index at this position
-            let box_index = test_game
-                .box_at(push_by_pos.box_pos.0, push_by_pos.box_pos.1)
-                .unwrap_or_else(|| {
-                    panic!(
-                        "Solution verification failed: no box at position ({}, {}) for push {}",
-                        push_by_pos.box_pos.0,
-                        push_by_pos.box_pos.1,
-                        i + 1
-                    )
-                });
+            let box_index = test_game.box_at(push_by_pos.box_pos).unwrap_or_else(|| {
+                panic!(
+                    "Solution verification failed: no box at position {} for push {}",
+                    push_by_pos.box_pos,
+                    i + 1
+                )
+            });
 
             // Compute valid pushes at this state
             let (valid_pushes, _canonical_pos) = test_game.compute_pushes();
@@ -534,10 +529,9 @@ impl<H: Heuristic, T: Tracer> Solver<H, T> {
             let push = Push::new(box_index, push_by_pos.direction);
             assert!(
                 valid_pushes.contains(push),
-                "Solution verification failed: push {} (box at ({}, {}), direction {:?}) is not valid",
+                "Solution verification failed: push {} (box at {}, direction {:?}) is not valid",
                 i + 1,
-                push_by_pos.box_pos.0,
-                push_by_pos.box_pos.1,
+                push_by_pos.box_pos,
                 push_by_pos.direction
             );
 
