@@ -77,7 +77,7 @@ impl GreedyHeuristic {
 
     /// BFS using pulls to compute distances from a goal position
     fn bfs_pulls(game: &Game, goal_idx: usize, distances: &mut [[u16; MAX_SIZE]; MAX_SIZE]) {
-        let start_pos = game.goal_pos(goal_idx);
+        let start_pos = game.goal_positions()[goal_idx];
         let mut queue = VecDeque::new();
         queue.push_back((start_pos.0, start_pos.1));
         distances[start_pos.1 as usize][start_pos.0 as usize] = 0;
@@ -110,7 +110,7 @@ impl GreedyHeuristic {
 
     /// BFS using pushes to compute distances from a box start position
     fn bfs_pushes(game: &Game, box_idx: usize, distances: &mut [[u16; MAX_SIZE]; MAX_SIZE]) {
-        let start_pos = game.box_start_pos(box_idx);
+        let start_pos = game.start_positions()[box_idx];
         let mut queue = VecDeque::new();
         queue.push_back((start_pos.0, start_pos.1));
         distances[start_pos.1 as usize][start_pos.0 as usize] = 0;
@@ -150,8 +150,7 @@ impl GreedyHeuristic {
         let mut dst_to_box = [u16::MAX; MAX_BOXES];
         let box_count = game.box_count();
 
-        for i in 0..box_count {
-            let pos = game.box_pos(i);
+        for pos in game.box_positions().iter() {
             let mut box_to_dst = u16::MAX;
 
             for dst_idx in 0..box_count {

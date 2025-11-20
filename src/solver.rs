@@ -233,9 +233,9 @@ impl<H: Heuristic, T: Tracer, S: SearchHelper> Searcher<H, T, S> {
 
         // Try each push
         for move_ in &moves {
-            let old_box_pos = game.box_pos(move_.box_index() as usize);
+            let old_box_pos = game.box_positions()[move_.box_index() as usize];
             self.helper.apply_move(game, &move_);
-            let new_box_pos = game.box_pos(move_.box_index() as usize);
+            let new_box_pos = game.box_positions()[move_.box_index() as usize];
 
             if let Some(tracer) = &self.tracer {
                 tracer.trace_move(
@@ -310,9 +310,9 @@ impl<H: Heuristic, T: Tracer, S: SearchHelper> Searcher<H, T, S> {
             // Try each unmove to find which one leads to parent state
             let mut found = false;
             for unmove in &unmoves {
-                let old_box_pos = current_game.box_pos(unmove.box_index() as usize);
+                let old_box_pos = current_game.box_positions()[unmove.box_index() as usize];
                 self.helper.unapply_move(&mut current_game, &unmove);
-                let new_box_pos = current_game.box_pos(unmove.box_index() as usize);
+                let new_box_pos = current_game.box_positions()[unmove.box_index() as usize];
 
                 // Compute hash of this previous state
                 let prev_hash = self.zobrist.compute_hash(&current_game);

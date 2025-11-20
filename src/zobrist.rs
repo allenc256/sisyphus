@@ -53,8 +53,7 @@ impl Zobrist {
     /// Compute hash for all boxes in a game state
     pub fn compute_boxes_hash(&self, game: &Game) -> u64 {
         let mut boxes_hash = 0u64;
-        for box_idx in 0..game.box_count() {
-            let (x, y) = game.box_pos(box_idx);
+        for &(x, y) in game.box_positions() {
             boxes_hash ^= self.box_hash(x, y);
         }
         boxes_hash

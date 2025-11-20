@@ -264,58 +264,22 @@ impl<T: Move> IntoIterator for &'_ Moves<T> {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Boxes {
-    start_positions: [(u8, u8); MAX_BOXES],
-    positions: [(u8, u8); MAX_BOXES],
-    count: u8,
+    positions: ArrayVec<(u8, u8), MAX_BOXES>,
     // Maps board position to box index (255 = no box at this position)
     index: [[u8; MAX_SIZE]; MAX_SIZE],
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct Goals {
-    positions: [(u8, u8); MAX_BOXES],
-    count: u8,
-}
-
-impl Goals {
-    fn new() -> Self {
-        Goals {
-            positions: [(0, 0); MAX_BOXES],
-            count: 0,
-        }
-    }
-
-    fn add(&mut self, x: u8, y: u8) {
-        assert!(
-            (self.count as usize) < MAX_BOXES,
-            "Cannot add goal: maximum of {} goals exceeded",
-            MAX_BOXES
-        );
-        self.positions[self.count as usize] = (x, y);
-        self.count += 1;
-    }
 }
 
 impl Boxes {
     fn new() -> Self {
         Boxes {
-            start_positions: [(0, 0); MAX_BOXES],
-            positions: [(0, 0); MAX_BOXES],
-            count: 0,
+            positions: ArrayVec::new(),
             index: [[255u8; MAX_SIZE]; MAX_SIZE],
         }
     }
 
     fn add(&mut self, x: u8, y: u8) {
-        assert!(
-            (self.count as usize) < MAX_BOXES,
-            "Cannot add box: maximum of {} boxes exceeded",
-            MAX_BOXES
-        );
-        self.start_positions[self.count as usize] = (x, y);
-        self.positions[self.count as usize] = (x, y);
-        self.index[y as usize][x as usize] = self.count;
-        self.count += 1;
+        self.index[y as usize][x as usize] = self.positions.len() as u8;
+        self.positions.push((x, y));
     }
 
     fn move_box(&mut self, from_x: u8, from_y: u8, to_x: u8, to_y: u8) {
@@ -338,7 +302,8 @@ pub struct Game {
     width: u8,
     height: u8,
     boxes: Boxes,
-    goals: Goals,
+    start_positions: ArrayVec<(u8, u8), MAX_BOXES>,
+    goal_positions: ArrayVec<(u8, u8), MAX_BOXES>,
 }
 
 impl Game {
@@ -378,7 +343,8 @@ impl Game {
         let mut tiles = [[Tile::Floor; MAX_SIZE]; MAX_SIZE];
         let mut player_pos = None;
         let mut boxes = Boxes::new();
-        let mut goals = Goals::new();
+        let mut start_positions = ArrayVec::new();
+        let mut goal_positions = ArrayVec::new();
         let mut empty_goals: u8 = 0;
 
         for (y, line) in lines.iter().enumerate() {
@@ -388,16 +354,18 @@ impl Game {
                     ' ' => tiles[y][x] = Tile::Floor,
                     '.' => {
                         tiles[y][x] = Tile::Goal;
-                        goals.add(x as u8, y as u8);
+                        goal_positions.push((x as u8, y as u8));
                         empty_goals += 1;
                     }
                     '$' => {
                         tiles[y][x] = Tile::Floor;
                         boxes.add(x as u8, y as u8);
+                        start_positions.push((x as u8, y as u8));
                     }
                     '*' => {
                         tiles[y][x] = Tile::Goal;
-                        goals.add(x as u8, y as u8);
+                        goal_positions.push((x as u8, y as u8));
+                        start_positions.push((x as u8, y as u8));
                         boxes.add(x as u8, y as u8);
                     }
                     '@' => {
@@ -413,7 +381,7 @@ impl Game {
                             return Err("Multiple players found".to_string());
                         }
                         player_pos = Some(PlayerPos::Known(x as u8, y as u8));
-                        goals.add(x as u8, y as u8);
+                        goal_positions.push((x as u8, y as u8));
                         empty_goals += 1;
                     }
                     _ => {
@@ -429,10 +397,11 @@ impl Game {
         let player_pos = player_pos.ok_or("No player found on board")?;
 
         // Validate that the number of goals matches the number of boxes
-        if goals.count != boxes.count {
+        if goal_positions.len() != boxes.positions.len() {
             return Err(format!(
                 "Goal count ({}) does not match box count ({})",
-                goals.count, boxes.count
+                goal_positions.len(),
+                boxes.positions.len()
             ));
         }
 
@@ -443,7 +412,8 @@ impl Game {
             width: width as u8,
             height: height as u8,
             boxes,
-            goals,
+            start_positions,
+            goal_positions,
         })
     }
 
@@ -452,19 +422,19 @@ impl Game {
     }
 
     pub fn box_count(&self) -> usize {
-        self.boxes.count as usize
+        self.boxes.positions.len() as usize
     }
 
-    pub fn box_pos(&self, index: usize) -> (u8, u8) {
-        self.boxes.positions[index]
+    pub fn box_positions(&self) -> &[(u8, u8)] {
+        &self.boxes.positions
     }
 
-    pub fn box_start_pos(&self, index: usize) -> (u8, u8) {
-        self.boxes.start_positions[index]
+    pub fn start_positions(&self) -> &[(u8, u8)] {
+        &self.start_positions
     }
 
-    pub fn goal_pos(&self, index: usize) -> (u8, u8) {
-        self.goals.positions[index]
+    pub fn goal_positions(&self) -> &[(u8, u8)] {
+        &self.goal_positions
     }
 
     /// Get the box index at the given position, if any.
@@ -493,7 +463,7 @@ impl Game {
     /// Panics if the push is invalid (invalid box index, destination blocked, etc.)
     pub fn push(&mut self, push: Push) {
         assert!(
-            (push.box_index as usize) < self.boxes.count as usize,
+            (push.box_index as usize) < self.boxes.positions.len() as usize,
             "Invalid box index: {}",
             push.box_index
         );
@@ -532,7 +502,7 @@ impl Game {
 
     pub fn pull(&mut self, pull: Pull) {
         assert!(
-            (pull.box_index as usize) < self.boxes.count as usize,
+            (pull.box_index as usize) < self.boxes.positions.len() as usize,
             "Invalid box index: {}",
             pull.box_index
         );
@@ -582,14 +552,12 @@ impl Game {
         // Do this in two passes to avoid clobbering unprocessed boxes
 
         // First pass: clear all current positions in index
-        for i in 0..game.boxes.count as usize {
-            let current_pos = game.boxes.positions[i];
-            game.boxes.index[current_pos.1 as usize][current_pos.0 as usize] = 255;
+        for &(box_x, box_y) in game.boxes.positions.iter() {
+            game.boxes.index[box_y as usize][box_x as usize] = 255;
         }
 
         // Second pass: set all new positions
-        for i in 0..game.boxes.count as usize {
-            let goal_pos = game.goals.positions[i];
+        for (i, &goal_pos) in game.goal_positions.iter().enumerate() {
             game.boxes.positions[i] = goal_pos;
             game.boxes.index[goal_pos.1 as usize][goal_pos.0 as usize] = i as u8;
         }
@@ -647,7 +615,7 @@ impl Game {
         let mut pushes = Moves::new();
         let canonical_pos = self.player_dfs((x, y), visited, |_player_pos, dir, box_idx| {
             boxes.add(box_idx);
-            let box_pos = self.box_pos(box_idx as usize);
+            let box_pos = self.boxes.positions[box_idx as usize];
             if let Some((dest_x, dest_y)) = self.move_position(box_pos.0, box_pos.1, dir) {
                 if !self.is_blocked(dest_x, dest_y) {
                     pushes.add(box_idx, dir);
@@ -672,7 +640,7 @@ impl Game {
         // other side of a valid player push (any corral NOT on the other side
         // of a player push full the "P" condition of a PI-corral).
         for push in pushes.iter() {
-            let (bx, by) = self.box_pos(push.box_index as usize);
+            let (bx, by) = self.boxes.positions[push.box_index as usize];
             let Some((nx, ny)) = self.move_position(bx, by, push.direction) else {
                 panic!("Invalid push");
             };
@@ -757,7 +725,7 @@ impl Game {
 
         // Check the PI conditions over the edge boxes
         for box_idx in corral_edge.iter() {
-            let (bx, by) = self.box_pos(box_idx as usize);
+            let (bx, by) = self.boxes.positions[box_idx as usize];
             for &dir in &ALL_DIRECTIONS {
                 if let (Some((nx, ny)), Some((px, py))) = (
                     self.move_position(bx, by, dir),
