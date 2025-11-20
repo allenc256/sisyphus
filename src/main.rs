@@ -117,7 +117,12 @@ struct SolveOpts {
     trace_range: Option<(usize, usize)>,
 }
 
-fn solve_level_helper<H: Heuristic>(game: &Game, opts: SolveOpts, heuristic: H) -> LevelStats {
+fn solve_level_helper<H: Heuristic>(
+    game: &Game,
+    opts: SolveOpts,
+    forward_heuristic: H,
+    reverse_heuristic: H,
+) -> LevelStats {
     let tracer: Option<VerboseTracer> = if let Some((trace_start, trace_end)) = opts.trace_range {
         Some(VerboseTracer::new(trace_start, trace_end))
     } else {
@@ -126,7 +131,8 @@ fn solve_level_helper<H: Heuristic>(game: &Game, opts: SolveOpts, heuristic: H) 
 
     let mut solver = Solver::new(
         opts.max_nodes_explored,
-        heuristic,
+        forward_heuristic,
+        reverse_heuristic,
         opts.search_type,
         game,
         opts.freeze_deadlocks,
@@ -168,8 +174,15 @@ fn solve_level_helper<H: Heuristic>(game: &Game, opts: SolveOpts, heuristic: H) 
 
 fn solve_level(game: &Game, opts: SolveOpts, heuristic_type: HeuristicType) -> LevelStats {
     match heuristic_type {
-        HeuristicType::Greedy => solve_level_helper(game, opts, GreedyHeuristic::new(game)),
-        HeuristicType::Null => solve_level_helper(game, opts, NullHeuristic::new()),
+        HeuristicType::Greedy => solve_level_helper(
+            game,
+            opts,
+            GreedyHeuristic::new_forward(game),
+            GreedyHeuristic::new_reverse(game),
+        ),
+        HeuristicType::Null => {
+            solve_level_helper(game, opts, NullHeuristic::new(), NullHeuristic::new())
+        }
     }
 }
 

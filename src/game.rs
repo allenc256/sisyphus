@@ -435,7 +435,7 @@ impl Game {
     }
 
     pub fn box_count(&self) -> usize {
-        self.boxes.positions.len() as usize
+        self.boxes.positions.len()
     }
 
     pub fn box_positions(&self) -> &[Position] {

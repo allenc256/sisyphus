@@ -1,19 +1,11 @@
 use crate::game::{ALL_DIRECTIONS, Game, MAX_BOXES, MAX_SIZE, Position, Tile};
 use std::collections::VecDeque;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Cost {
-    Solvable(u16),
-    Impossible,
-}
-
-/// Trait for computing heuristics that estimate the number of pushes needed to solve a game.
+/// Trait for computing heuristics that estimate the number of moves (pushes/pulls) needed.
+/// Returns None if the position is impossible to solve, or Some(cost) with the estimated cost.
 pub trait Heuristic {
-    /// Compute estimated number of pushes needed to complete the game from the current state.
-    fn compute_forward(&self, game: &Game) -> Cost;
-
-    /// Compute estimated number of pushes needed to get to the current state from the initial state.
-    fn compute_backward(&self, game: &Game) -> Cost;
+    /// Compute estimated number of moves (pushes/pulls).
+    fn compute(&self, game: &Game) -> Option<u16>;
 }
 
 pub struct NullHeuristic;
@@ -25,32 +17,27 @@ impl NullHeuristic {
 }
 
 impl Heuristic for NullHeuristic {
-    fn compute_forward(&self, _game: &Game) -> Cost {
-        Cost::Solvable(0)
-    }
-
-    fn compute_backward(&self, _game: &Game) -> Cost {
-        Cost::Solvable(0)
+    fn compute(&self, _game: &Game) -> Option<u16> {
+        Some(0)
     }
 }
 
-/// A heuristic based on greedy matching of boxes to goals using precomputed push distances.
+/// A heuristic based on greedy matching of boxes to goals using precomputed push/pull distances.
 pub struct GreedyHeuristic {
-    /// goal_distances[goal_idx][y][x] = minimum pushes to get a box from (x, y) to goal goal_idx
-    goal_distances: Box<[[[u16; MAX_SIZE]; MAX_SIZE]; MAX_BOXES]>,
-    /// start_distances[box_idx][y][x] = minimum pulls to get a box from (x, y) to start position box_idx
-    start_distances: Box<[[[u16; MAX_SIZE]; MAX_SIZE]; MAX_BOXES]>,
+    /// distances[idx][y][x] = minimum pushes/pulls to get a box from (x, y) to destination idx
+    distances: Box<[[[u16; MAX_SIZE]; MAX_SIZE]; MAX_BOXES]>,
 }
 
 #[allow(clippy::needless_range_loop)]
 impl GreedyHeuristic {
-    pub fn new(game: &Game) -> Self {
-        let goal_distances = Box::new(Self::compute_distances_from_goals(game));
-        let start_distances = Box::new(Self::compute_distances_from_starts(game));
-        GreedyHeuristic {
-            goal_distances,
-            start_distances,
-        }
+    pub fn new_forward(game: &Game) -> Self {
+        let distances = Box::new(Self::compute_distances_from_goals(game));
+        GreedyHeuristic { distances }
+    }
+
+    pub fn new_reverse(game: &Game) -> Self {
+        let distances = Box::new(Self::compute_distances_from_starts(game));
+        GreedyHeuristic { distances }
     }
 
     /// Compute push distances from each goal to all positions using BFS with pulls
@@ -131,7 +118,10 @@ impl GreedyHeuristic {
         }
     }
 
-    fn greedy_distance(game: &Game, distances: &[[[u16; MAX_SIZE]; MAX_SIZE]; MAX_BOXES]) -> Cost {
+    fn greedy_distance(
+        game: &Game,
+        distances: &[[[u16; MAX_SIZE]; MAX_SIZE]; MAX_BOXES],
+    ) -> Option<u16> {
         // Compute two distances:
         //   box_to_dst_total: total distance from each box to its nearest destination.
         //   dst_to_box_total: total distance from each destination to its nearest box.
@@ -152,7 +142,7 @@ impl GreedyHeuristic {
             }
 
             if box_to_dst == u16::MAX {
-                return Cost::Impossible;
+                return None;
             }
 
             box_to_dst_total += box_to_dst;
@@ -162,23 +152,19 @@ impl GreedyHeuristic {
         for i in 0..box_count {
             let dist = dst_to_box[i];
             if dist == u16::MAX {
-                return Cost::Impossible;
+                return None;
             } else {
                 dst_to_box_total += dist;
             }
         }
 
-        Cost::Solvable(std::cmp::max(dst_to_box_total, box_to_dst_total))
+        Some(std::cmp::max(dst_to_box_total, box_to_dst_total))
     }
 }
 
 impl Heuristic for GreedyHeuristic {
-    fn compute_forward(&self, game: &Game) -> Cost {
-        Self::greedy_distance(game, &self.goal_distances)
-    }
-
-    fn compute_backward(&self, game: &Game) -> Cost {
-        Self::greedy_distance(game, &self.start_distances)
+    fn compute(&self, game: &Game) -> Option<u16> {
+        Self::greedy_distance(game, &self.distances)
     }
 }
 
@@ -192,9 +178,9 @@ mod tests {
                      #@*#\n\
                      ####";
         let game = Game::from_text(input).unwrap();
-        let heuristic = GreedyHeuristic::new(&game);
+        let heuristic = GreedyHeuristic::new_forward(&game);
 
-        assert_eq!(heuristic.compute_forward(&game), Cost::Solvable(0));
+        assert_eq!(heuristic.compute(&game), Some(0));
     }
 
     #[test]
@@ -203,10 +189,10 @@ mod tests {
                      #@$.#\n\
                      ####";
         let game = Game::from_text(input).unwrap();
-        let heuristic = GreedyHeuristic::new(&game);
+        let heuristic = GreedyHeuristic::new_forward(&game);
 
         // Box at (2,1), goal at (3,1), push distance = 1
-        assert_eq!(heuristic.compute_forward(&game), Cost::Solvable(1));
+        assert_eq!(heuristic.compute(&game), Some(1));
     }
 
     #[test]
@@ -218,10 +204,10 @@ mod tests {
                      #  @ #\n\
                      ######";
         let game = Game::from_text(input).unwrap();
-        let heuristic = GreedyHeuristic::new(&game);
+        let heuristic = GreedyHeuristic::new_forward(&game);
 
         // Two boxes at (2,2) and (3,2), two goals at (2,3) and (3,3)
         // Greedy matching should pair them optimally: each box is 1 away from a goal
-        assert_eq!(heuristic.compute_forward(&game), Cost::Solvable(2));
+        assert_eq!(heuristic.compute(&game), Some(2));
     }
 }

@@ -1,6 +1,6 @@
 use crate::deadlocks::Deadlocks;
 use crate::game::{Direction, Game, Move, Moves, PlayerPos, Position, Pull, Push};
-use crate::heuristic::{Cost, Heuristic};
+use crate::heuristic::Heuristic;
 use crate::zobrist::Zobrist;
 use std::collections::HashMap;
 use std::rc::Rc;
@@ -42,7 +42,7 @@ struct Searcher<H: Heuristic, T: Tracer, S: SearchHelper> {
     max_nodes_explored: usize,
     table: HashMap<u64, TableEntry>, // Transposition table mapping state hash to entry
     zobrist: Rc<Zobrist>,
-    heuristic: Rc<H>,
+    heuristic: H,
     initial_game: Rc<Game>,
     initial_hash: u64,
     initial_boxes_hash: u64,
@@ -105,7 +105,7 @@ impl<H: Heuristic, T: Tracer, S: SearchHelper> Searcher<H, T, S> {
     fn new(
         zobrist: Rc<Zobrist>,
         max_nodes_explored: usize,
-        heuristic: Rc<H>,
+        heuristic: H,
         initial_game: Rc<Game>,
         freeze_deadlocks: bool,
         tracer: Option<Rc<T>>,
@@ -191,9 +191,9 @@ impl<H: Heuristic, T: Tracer, S: SearchHelper> Searcher<H, T, S> {
 
         // Compute heuristic and f-cost
         let mut f_cost = g_cost;
-        match self.compute_heuristic(game) {
-            Cost::Solvable(h_cost) => f_cost += h_cost as usize,
-            Cost::Impossible => return SearchResult::Impossible,
+        match self.heuristic.compute(game) {
+            Some(h_cost) => f_cost += h_cost as usize,
+            None => return SearchResult::Impossible,
         }
 
         // If f-cost exceeds threshold, stop searching this branch
@@ -347,14 +347,6 @@ impl<H: Heuristic, T: Tracer, S: SearchHelper> Searcher<H, T, S> {
         solution.reverse();
         solution
     }
-
-    fn compute_heuristic(&self, game: &Game) -> Cost {
-        if self.helper.is_forwards_search() {
-            self.heuristic.compute_forward(game)
-        } else {
-            self.heuristic.compute_backward(game)
-        }
-    }
 }
 
 impl SearchHelper for ForwardsSearchHelper {
@@ -412,7 +404,8 @@ impl SearchHelper for BackwardsSearchHelper {
 impl<H: Heuristic, T: Tracer> Solver<H, T> {
     pub fn new(
         max_nodes_explored: usize,
-        heuristic: H,
+        forward_heuristic: H,
+        reverse_heuristic: H,
         search_type: SearchType,
         game: &Game,
         freeze_deadlocks: bool,
@@ -420,7 +413,6 @@ impl<H: Heuristic, T: Tracer> Solver<H, T> {
         tracer: Option<T>,
     ) -> Self {
         let zobrist = Rc::new(Zobrist::new());
-        let heuristic = Rc::new(heuristic);
         let tracer = tracer.map(|t| Rc::new(t));
         let forwards_game = Rc::new(game.clone());
         let backwards_game = Rc::new(game.make_goal_state());
@@ -429,7 +421,7 @@ impl<H: Heuristic, T: Tracer> Solver<H, T> {
             forwards: Searcher::new(
                 zobrist.clone(),
                 max_nodes_explored,
-                heuristic.clone(),
+                forward_heuristic,
                 forwards_game,
                 freeze_deadlocks,
                 tracer.clone(),
@@ -438,7 +430,7 @@ impl<H: Heuristic, T: Tracer> Solver<H, T> {
             backwards: Searcher::new(
                 zobrist,
                 max_nodes_explored,
-                heuristic,
+                reverse_heuristic,
                 backwards_game,
                 freeze_deadlocks,
                 tracer,
@@ -646,7 +638,8 @@ mod tests {
     fn new_solver(game: &Game) -> Solver<GreedyHeuristic, NullTracer> {
         Solver::new(
             5000000,
-            GreedyHeuristic::new(game),
+            GreedyHeuristic::new_forward(game),
+            GreedyHeuristic::new_reverse(game),
             SearchType::Forwards,
             game,
             true,
