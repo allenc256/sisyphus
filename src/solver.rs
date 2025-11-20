@@ -1,5 +1,5 @@
 use crate::deadlocks::Deadlocks;
-use crate::game::{Direction, Game, Move, Moves, PlayerPos, Position, Pull, Push};
+use crate::game::{Direction, Game, Move, Moves, Position, Pull, Push};
 use crate::heuristic::Heuristic;
 use crate::zobrist::Zobrist;
 use std::collections::HashMap;
@@ -56,7 +56,7 @@ struct Searcher<H: Heuristic, T: Tracer, S: SearchHelper> {
 trait SearchHelper {
     type Move: Move;
 
-    fn compute_moves(&self, game: &Game) -> (Moves<Self::Move>, PlayerPos);
+    fn compute_moves(&self, game: &Game) -> (Moves<Self::Move>, Option<Position>);
     fn compute_unmoves(&self, game: &Game) -> Moves<Self::Move>;
     fn apply_move(&self, game: &mut Game, move_: &Self::Move);
     fn unapply_move(&self, game: &mut Game, move_: &Self::Move);
@@ -341,7 +341,7 @@ impl<H: Heuristic, T: Tracer, S: SearchHelper> Searcher<H, T, S> {
 impl SearchHelper for ForwardsSearchHelper {
     type Move = Push;
 
-    fn compute_moves(&self, game: &Game) -> (Moves<Push>, PlayerPos) {
+    fn compute_moves(&self, game: &Game) -> (Moves<Push>, Option<Position>) {
         if self.pi_corrals {
             game.compute_pi_corral_pushes()
         } else {
@@ -365,7 +365,7 @@ impl SearchHelper for ForwardsSearchHelper {
 impl SearchHelper for BackwardsSearchHelper {
     type Move = Pull;
 
-    fn compute_moves(&self, game: &Game) -> (Moves<Pull>, PlayerPos) {
+    fn compute_moves(&self, game: &Game) -> (Moves<Pull>, Option<Position>) {
         game.compute_pulls()
     }
 

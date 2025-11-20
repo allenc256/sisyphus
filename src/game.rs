@@ -25,12 +25,6 @@ pub enum Tile {
     Goal,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PlayerPos {
-    Known(Position),
-    Unknown,
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Direction {
     Up,
@@ -322,7 +316,7 @@ impl Boxes {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Game {
     tiles: [[Tile; MAX_SIZE]; MAX_SIZE],
-    player: PlayerPos,
+    player: Option<Position>,
     empty_goals: u8,
     width: u8,
     height: u8,
@@ -366,7 +360,7 @@ impl Game {
         }
 
         let mut tiles = [[Tile::Floor; MAX_SIZE]; MAX_SIZE];
-        let mut player_pos = None;
+        let mut player = None;
         let mut boxes = Boxes::new();
         let mut start_positions = ArrayVec::new();
         let mut goal_positions = ArrayVec::new();
@@ -395,17 +389,17 @@ impl Game {
                     }
                     '@' => {
                         tiles[y][x] = Tile::Floor;
-                        if player_pos.is_some() {
+                        if player.is_some() {
                             return Err("Multiple players found".to_string());
                         }
-                        player_pos = Some(PlayerPos::Known(Position(x as u8, y as u8)));
+                        player = Some(Position(x as u8, y as u8));
                     }
                     '+' => {
                         tiles[y][x] = Tile::Goal;
-                        if player_pos.is_some() {
+                        if player.is_some() {
                             return Err("Multiple players found".to_string());
                         }
-                        player_pos = Some(PlayerPos::Known(Position(x as u8, y as u8)));
+                        player = Some(Position(x as u8, y as u8));
                         goal_positions.push(Position(x as u8, y as u8));
                         empty_goals += 1;
                     }
@@ -419,7 +413,9 @@ impl Game {
             }
         }
 
-        let player_pos = player_pos.ok_or("No player found on board")?;
+        if player.is_none() {
+            return Err("No player found on board".to_owned());
+        }
 
         // Validate that the number of goals matches the number of boxes
         if goal_positions.len() != boxes.positions.len() {
@@ -432,7 +428,7 @@ impl Game {
 
         Ok(Game {
             tiles,
-            player: player_pos,
+            player,
             empty_goals,
             width: width as u8,
             height: height as u8,
@@ -524,7 +520,7 @@ impl Game {
         self.boxes.move_box(box_pos, new_pos);
 
         // Update player position to where the box was
-        self.player = PlayerPos::Known(box_pos);
+        self.player = Some(box_pos);
     }
 
     pub fn pull(&mut self, pull: Pull) {
@@ -556,7 +552,7 @@ impl Game {
         self.boxes.move_box(new_pos, old_pos);
 
         // Restore player position
-        self.player = PlayerPos::Known(player_old_pos);
+        self.player = Some(player_old_pos);
     }
 
     /// Check if all boxes are on goals (win condition)
@@ -588,26 +584,23 @@ impl Game {
         game.empty_goals = 0;
 
         // Set player position to unknown
-        game.player = PlayerPos::Unknown;
+        game.player = None;
 
         game
     }
 
     /// Compute the canonical (lexicographically smallest reachable) player position.
-    /// If player position is Unknown, returns Unknown.
-    pub fn canonical_player_pos(&self) -> PlayerPos {
+    /// If the player position is unknown, returns None.
+    /// The canonical position for a solved board is always None
+    pub fn canonical_player_pos(&self) -> Option<Position> {
         if self.is_solved() {
-            return PlayerPos::Unknown;
+            return None;
         }
 
-        match self.player {
-            PlayerPos::Known(pos) => {
-                let mut reachable = LazyBitboard::new();
-                let canonical_pos = self.player_dfs(pos, &mut reachable, |_pos, _dir, _box_idx| {});
-                PlayerPos::Known(canonical_pos)
-            }
-            PlayerPos::Unknown => PlayerPos::Unknown,
-        }
+        self.player.map(|pos| {
+            let mut reachable = LazyBitboard::new();
+            self.player_dfs(pos, &mut reachable, |_pos, _dir, _box_idx| {})
+        })
     }
 
     /// Compute all possible box pushes from the current game state.
@@ -615,7 +608,7 @@ impl Game {
     /// Returns the pushes and the canonicalized (lexicographically smallest) player position.
     /// If the game is already solved, returns empty pushes and Unknown player position.
     /// Panics if the player position is Unknown (and game is not solved).
-    pub fn compute_pushes(&self) -> (Moves<Push>, PlayerPos) {
+    pub fn compute_pushes(&self) -> (Moves<Push>, Option<Position>) {
         let mut visited = LazyBitboard::new();
         let mut boxes = Bitvector::new();
         self.compute_pushes_helper(&mut visited, &mut boxes)
@@ -625,15 +618,13 @@ impl Game {
         &self,
         visited: &mut LazyBitboard,
         boxes: &mut Bitvector,
-    ) -> (Moves<Push>, PlayerPos) {
+    ) -> (Moves<Push>, Option<Position>) {
         // We don't report moves when the game is solved.
         if self.is_solved() {
-            return (Moves::new(), PlayerPos::Unknown);
+            return (Moves::new(), None);
         }
 
-        let PlayerPos::Known(pos) = self.player else {
-            panic!("Cannot compute pushes when player position is unknown");
-        };
+        let pos = self.player.unwrap();
         let mut pushes = Moves::new();
         let canonical_pos = self.player_dfs(pos, visited, |_player_pos, dir, box_idx| {
             boxes.add(box_idx.0);
@@ -644,10 +635,10 @@ impl Game {
                 }
             }
         });
-        (pushes, PlayerPos::Known(canonical_pos))
+        (pushes, Some(canonical_pos))
     }
 
-    pub fn compute_pi_corral_pushes(&self) -> (Moves<Push>, PlayerPos) {
+    pub fn compute_pi_corral_pushes(&self) -> (Moves<Push>, Option<Position>) {
         let mut player_reachable = LazyBitboard::new();
         let mut player_reachable_boxes = Bitvector::new();
         let mut corrals_visited = LazyBitboard::new();
@@ -791,18 +782,18 @@ impl Game {
 
     /// Compute all possible pulls from the current game state.
     /// Returns the pulls and the canonicalized (lexicographically smallest) player position.
-    /// If player position is Unknown, computes pulls from all possible player positions
-    /// and returns Unknown as the canonical position.
-    pub fn compute_pulls(&self) -> (Moves<Pull>, PlayerPos) {
+    /// If player position is unknown, computes pulls from all possible player positions
+    /// and returns None as the canonical position.
+    pub fn compute_pulls(&self) -> (Moves<Pull>, Option<Position>) {
         let mut pulls = Moves::new();
         let mut visited = LazyBitboard::new();
 
         match self.player {
-            PlayerPos::Known(pos) => {
+            Some(pos) => {
                 let canonical_pos = self.compute_pulls_helper(pos, &mut visited, &mut pulls);
-                (pulls, PlayerPos::Known(canonical_pos))
+                (pulls, Some(canonical_pos))
             }
-            PlayerPos::Unknown => {
+            None => {
                 assert!(self.is_solved());
                 // Try each position as a potential player position
                 for y in 0..self.height {
@@ -821,7 +812,7 @@ impl Game {
                         }
                     }
                 }
-                (pulls, PlayerPos::Unknown)
+                (pulls, None)
             }
         }
     }
@@ -901,9 +892,7 @@ impl fmt::Display for Game {
                 let pos = Position(x, y);
                 let tile = self.tiles[y as usize][x as usize];
                 let has_box = self.boxes.has_box_at(pos);
-
-                let is_player =
-                    matches!(self.player, PlayerPos::Known(player_pos) if pos == player_pos);
+                let is_player = matches!(self.player, Some(player_pos) if pos == player_pos);
 
                 let ch = if is_player {
                     match tile {
@@ -948,7 +937,7 @@ mod tests {
 
         assert_eq!(game.width, 6);
         assert_eq!(game.height, 7);
-        assert_eq!(game.player, PlayerPos::Known(Position(2, 3)));
+        assert_eq!(game.player, Some(Position(2, 3)));
     }
 
     #[test]
@@ -974,7 +963,7 @@ mod tests {
                      #$. #\n\
                      ####";
         let game = Game::from_text(input).unwrap();
-        assert_eq!(game.player, PlayerPos::Known(Position(2, 1)));
+        assert_eq!(game.player, Some(Position(2, 1)));
         assert_eq!(game.get_tile(Position(2, 1)), Tile::Goal);
     }
 
@@ -1087,7 +1076,7 @@ mod tests {
         assert_eq!(game.get_tile(Position(2, 1)), Tile::Floor);
         assert!(!game.boxes.has_box_at(Position(2, 1)));
         // Player should be at old box position
-        assert_eq!(game.player, PlayerPos::Known(Position(2, 1)));
+        assert_eq!(game.player, Some(Position(2, 1)));
         // Should be solved
         assert!(game.is_solved());
         assert_eq!(game.empty_goals, 0);
@@ -1106,7 +1095,7 @@ mod tests {
             box_index: box_idx,
             direction: Direction::Right,
         });
-        assert_eq!(game.player, PlayerPos::Known(Position(2, 1)));
+        assert_eq!(game.player, Some(Position(2, 1)));
         assert!(game.boxes.has_box_at(Position(3, 1)));
 
         // Test pushing down
@@ -1121,7 +1110,7 @@ mod tests {
             box_index: box_idx,
             direction: Direction::Down,
         });
-        assert_eq!(game.player, PlayerPos::Known(Position(2, 2)));
+        assert_eq!(game.player, Some(Position(2, 2)));
         assert_eq!(game.get_tile(Position(2, 3)), Tile::Goal);
         assert!(game.boxes.has_box_at(Position(2, 3)));
 
@@ -1136,7 +1125,7 @@ mod tests {
             box_index: box_idx,
             direction: Direction::Left,
         });
-        assert_eq!(game.player, PlayerPos::Known(Position(2, 1)));
+        assert_eq!(game.player, Some(Position(2, 1)));
         assert!(game.boxes.has_box_at(Position(1, 1)));
 
         // Test pushing up
@@ -1151,7 +1140,7 @@ mod tests {
             box_index: box_idx,
             direction: Direction::Up,
         });
-        assert_eq!(game.player, PlayerPos::Known(Position(2, 2)));
+        assert_eq!(game.player, Some(Position(2, 2)));
         assert_eq!(game.get_tile(Position(2, 1)), Tile::Goal);
         assert!(game.boxes.has_box_at(Position(2, 1)));
     }
@@ -1199,7 +1188,7 @@ mod tests {
         assert_eq!(game.get_tile(Position(3, 1)), Tile::Floor);
         assert!(game.boxes.has_box_at(Position(3, 1)));
         assert_eq!(game.empty_goals, 1);
-        assert_eq!(game.player, PlayerPos::Known(Position(2, 1)));
+        assert_eq!(game.player, Some(Position(2, 1)));
     }
 
     #[test]
@@ -1310,7 +1299,7 @@ mod tests {
 
         // Check canonical position - should be lexicographically smallest reachable position
         // Player starts at (2, 3) and can reach many positions including (1, 1)
-        assert_eq!(canonical_pos, PlayerPos::Known(Position(1, 1)));
+        assert_eq!(canonical_pos, Some(Position(1, 1)));
     }
 
     #[test]
@@ -1329,7 +1318,7 @@ mod tests {
                 direction: Direction::Right
             }]
         );
-        assert_eq!(canonical_pos, PlayerPos::Known(Position(3, 1)));
+        assert_eq!(canonical_pos, Some(Position(3, 1)));
     }
 
     #[test]
@@ -1353,7 +1342,7 @@ mod tests {
             },
         ];
         expected.sort();
-        assert_eq!(canonical_pos, PlayerPos::Unknown);
+        assert_eq!(canonical_pos, None);
         assert_eq!(actual, expected);
     }
 
@@ -1379,7 +1368,7 @@ mod tests {
         game.push(push);
 
         // Verify state changed
-        assert_eq!(game.player, PlayerPos::Known(Position(2, 1)));
+        assert_eq!(game.player, Some(Position(2, 1)));
         assert!(game.boxes.has_box_at(Position(3, 1)));
         assert_eq!(game.empty_goals, 0);
         assert!(game.is_solved());

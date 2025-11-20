@@ -1,4 +1,4 @@
-use crate::game::{Game, MAX_SIZE, PlayerPos, Position};
+use crate::game::{Game, MAX_SIZE, Position};
 use rand::{RngCore, SeedableRng};
 use rand_chacha::ChaCha8Rng;
 
@@ -43,10 +43,10 @@ impl Zobrist {
     }
 
     /// Get hash value for player position
-    pub fn player_hash(&self, pos: PlayerPos) -> u64 {
+    pub fn player_hash(&self, pos: Option<Position>) -> u64 {
         match pos {
-            PlayerPos::Known(Position(x, y)) => self.player_hashes[y as usize][x as usize],
-            PlayerPos::Unknown => self.player_unknown_hash,
+            Some(Position(x, y)) => self.player_hashes[y as usize][x as usize],
+            None => self.player_unknown_hash,
         }
     }
 
