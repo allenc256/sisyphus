@@ -96,7 +96,7 @@ impl fmt::Display for Direction {
     }
 }
 
-pub trait Move {
+pub trait Move: fmt::Display {
     fn new(box_index: BoxIndex, direction: Direction) -> Self;
     fn box_index(&self) -> BoxIndex;
     fn direction(&self) -> Direction;
@@ -163,6 +163,18 @@ impl Move for Pull {
 
     fn direction(&self) -> Direction {
         self.direction
+    }
+}
+
+impl fmt::Display for Push {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Push #{} {}", self.box_index.0 + 1, self.direction)
+    }
+}
+
+impl fmt::Display for Pull {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Pull #{} {}", self.box_index.0 + 1, self.direction)
     }
 }
 

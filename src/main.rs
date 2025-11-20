@@ -81,20 +81,24 @@ impl VerboseTracer {
 impl Tracer for VerboseTracer {
     fn trace_move<M: Move>(
         &self,
-        is_forwards_search: bool,
         game: &Game,
         threshold: usize,
         f_cost: usize,
         g_cost: usize,
-        _move: &M,
+        move_: &M,
     ) {
         let new_count = self.trace_count.get() + 1;
-        let move_type = if is_forwards_search { "Push" } else { "Pull" };
         self.trace_count.set(new_count);
         if self.trace_start <= new_count && new_count <= self.trace_end {
             println!(
-                "{} {} (f_cost={}, g_cost={}, threshold={}):\n{}",
-                move_type, new_count, f_cost, g_cost, threshold, game
+                "move={}, pos={}, count={}, f_cost={}, g_cost={}, threshold={}:\n{}",
+                move_,
+                game.box_position(move_.box_index()),
+                new_count,
+                f_cost,
+                g_cost,
+                threshold,
+                game
             );
         }
     }

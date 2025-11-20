@@ -60,7 +60,6 @@ trait SearchHelper {
     fn compute_unmoves(&self, game: &Game) -> Moves<Self::Move>;
     fn apply_move(&self, game: &mut Game, move_: &Self::Move);
     fn unapply_move(&self, game: &mut Game, move_: &Self::Move);
-    fn is_forwards_search(&self) -> bool;
 }
 
 struct ForwardsSearchHelper {
@@ -78,15 +77,14 @@ pub enum SearchType {
 
 /// Manages iterative deepening A* by repeatedly calling Searcher with increasing thresholds
 pub struct Solver<H: Heuristic, T: Tracer> {
-    forwards: Searcher<H, T, ForwardsSearchHelper>,
-    backwards: Searcher<H, T, BackwardsSearchHelper>,
+    forward: Searcher<H, T, ForwardsSearchHelper>,
+    reverse: Searcher<H, T, BackwardsSearchHelper>,
     search_type: SearchType,
 }
 
 pub trait Tracer {
     fn trace_move<M: Move>(
         &self,
-        is_forwards: bool,
         game: &Game,
         threshold: usize,
         f_cost: usize,
@@ -238,14 +236,7 @@ impl<H: Heuristic, T: Tracer, S: SearchHelper> Searcher<H, T, S> {
             let new_box_pos = game.box_position(move_.box_index());
 
             if let Some(tracer) = &self.tracer {
-                tracer.trace_move(
-                    self.helper.is_forwards_search(),
-                    game,
-                    threshold,
-                    f_cost,
-                    g_cost,
-                    &move_,
-                );
+                tracer.trace_move(game, threshold, f_cost, g_cost, &move_);
             }
 
             if self.freeze_deadlocks && Deadlocks::is_freeze_deadlock(game, new_box_pos) {
@@ -283,7 +274,7 @@ impl<H: Heuristic, T: Tracer, S: SearchHelper> Searcher<H, T, S> {
         result
     }
 
-    fn reconstruct_solution(&self, final_game: &Game) -> Vec<PushByPos> {
+    fn reconstruct_solution(&self, final_game: &Game, forward: bool) -> Vec<PushByPos> {
         let mut solution = Vec::new();
         let mut current_game = final_game.clone();
         let mut current_hash = self.zobrist.compute_hash(&current_game);
@@ -318,12 +309,8 @@ impl<H: Heuristic, T: Tracer, S: SearchHelper> Searcher<H, T, S> {
                 // Check if this matches the parent we're looking for
                 if prev_hash == target_parent_hash {
                     solution.push(PushByPos {
-                        box_pos: if self.helper.is_forwards_search() {
-                            new_box_pos
-                        } else {
-                            old_box_pos
-                        },
-                        direction: if self.helper.is_forwards_search() {
+                        box_pos: if forward { new_box_pos } else { old_box_pos },
+                        direction: if forward {
                             unmove.direction()
                         } else {
                             unmove.direction().reverse()
@@ -344,7 +331,9 @@ impl<H: Heuristic, T: Tracer, S: SearchHelper> Searcher<H, T, S> {
             );
         }
 
-        solution.reverse();
+        if forward {
+            solution.reverse();
+        }
         solution
     }
 }
@@ -371,10 +360,6 @@ impl SearchHelper for ForwardsSearchHelper {
     fn unapply_move(&self, game: &mut Game, push: &Push) {
         game.pull(push.to_pull());
     }
-
-    fn is_forwards_search(&self) -> bool {
-        true
-    }
 }
 
 impl SearchHelper for BackwardsSearchHelper {
@@ -395,10 +380,6 @@ impl SearchHelper for BackwardsSearchHelper {
     fn unapply_move(&self, game: &mut Game, pull: &Pull) {
         game.push(pull.to_push())
     }
-
-    fn is_forwards_search(&self) -> bool {
-        false
-    }
 }
 
 impl<H: Heuristic, T: Tracer> Solver<H, T> {
@@ -418,7 +399,7 @@ impl<H: Heuristic, T: Tracer> Solver<H, T> {
         let backwards_game = Rc::new(game.make_goal_state());
 
         Solver {
-            forwards: Searcher::new(
+            forward: Searcher::new(
                 zobrist.clone(),
                 max_nodes_explored,
                 forward_heuristic,
@@ -427,7 +408,7 @@ impl<H: Heuristic, T: Tracer> Solver<H, T> {
                 tracer.clone(),
                 ForwardsSearchHelper { pi_corrals },
             ),
-            backwards: Searcher::new(
+            reverse: Searcher::new(
                 zobrist,
                 max_nodes_explored,
                 reverse_heuristic,
@@ -441,10 +422,7 @@ impl<H: Heuristic, T: Tracer> Solver<H, T> {
     }
 
     pub fn nodes_explored(&self) -> (usize, usize) {
-        (
-            self.forwards.nodes_explored(),
-            self.backwards.nodes_explored(),
-        )
+        (self.forward.nodes_explored(), self.reverse.nodes_explored())
     }
 
     // Implements bidirectional search. Note that this implementation does not
@@ -454,37 +432,37 @@ impl<H: Heuristic, T: Tracer> Solver<H, T> {
     // when the forwards and backwards searchers overlap), the combined solution
     // might not be optimal.
     pub fn solve(&mut self) -> SolveResult {
-        let mut forwards_threshold = 0;
-        let mut backwards_threshold = 0;
+        let mut forward_threshold = 0;
+        let mut reverse_threshold = 0;
 
         loop {
-            let is_forwards = match self.search_type {
+            let search_forward = match self.search_type {
                 SearchType::Forward => true,
                 SearchType::Reverse => false,
                 SearchType::Bidirectional => {
-                    self.forwards.nodes_explored() <= self.backwards.nodes_explored()
+                    self.forward.nodes_explored() <= self.reverse.nodes_explored()
                 }
             };
 
-            if is_forwards {
-                match self.forwards.search(forwards_threshold, &|hash| {
-                    self.backwards.table.contains_key(&hash)
+            if search_forward {
+                match self.forward.search(forward_threshold, &|hash| {
+                    self.reverse.table.contains_key(&hash)
                 }) {
                     SearchResult::Solved(game) => {
                         return SolveResult::Solved(self.reconstruct_solution(&game));
                     }
-                    SearchResult::Exceeded => forwards_threshold += 1,
+                    SearchResult::Exceeded => forward_threshold += 1,
                     SearchResult::Cutoff => return SolveResult::Cutoff,
                     SearchResult::Impossible => return SolveResult::Impossible,
                 }
             } else {
-                match self.backwards.search(backwards_threshold, &|hash| {
-                    self.forwards.table.contains_key(&hash)
+                match self.reverse.search(reverse_threshold, &|hash| {
+                    self.forward.table.contains_key(&hash)
                 }) {
                     SearchResult::Solved(game) => {
                         return SolveResult::Solved(self.reconstruct_solution(&game));
                     }
-                    SearchResult::Exceeded => backwards_threshold += 1,
+                    SearchResult::Exceeded => reverse_threshold += 1,
                     SearchResult::Cutoff => return SolveResult::Cutoff,
                     SearchResult::Impossible => return SolveResult::Impossible,
                 }
@@ -493,18 +471,20 @@ impl<H: Heuristic, T: Tracer> Solver<H, T> {
     }
 
     fn reconstruct_solution(&self, game: &Game) -> Vec<Push> {
-        let mut forwards_soln = self.forwards.reconstruct_solution(&game);
-        let mut backwards_soln = self.backwards.reconstruct_solution(&game);
-        backwards_soln.reverse();
-        forwards_soln.extend_from_slice(&backwards_soln);
-        self.remap_solution(&forwards_soln)
+        let forward_soln = self.forward.reconstruct_solution(&game, true);
+        let reverse_soln = self.reverse.reconstruct_solution(&game, false);
+        self.combine_solution(&forward_soln, &reverse_soln)
     }
 
-    fn remap_solution(&self, solution: &[PushByPos]) -> Vec<Push> {
-        let mut test_game = (*self.forwards.initial_game).clone();
+    fn combine_solution(
+        &self,
+        forward_soln: &[PushByPos],
+        reverse_soln: &[PushByPos],
+    ) -> Vec<Push> {
+        let mut test_game = (*self.forward.initial_game).clone();
         let mut soln = Vec::new();
 
-        for (i, push_by_pos) in solution.iter().enumerate() {
+        for (i, push_by_pos) in forward_soln.iter().chain(reverse_soln.iter()).enumerate() {
             // Get box index at this position
             let box_index = test_game.box_at(push_by_pos.box_pos).unwrap_or_else(|| {
                 panic!(
@@ -535,8 +515,7 @@ impl<H: Heuristic, T: Tracer> Solver<H, T> {
         // Verify final state is solved
         assert!(
             test_game.is_solved(),
-            "Solution verification failed: after {} pushes, puzzle is not solved",
-            solution.len()
+            "Solution verification failed: puzzle is not solved"
         );
 
         soln
@@ -624,7 +603,6 @@ mod tests {
     impl Tracer for NullTracer {
         fn trace_move<M: Move>(
             &self,
-            _is_forwards_search: bool,
             _game: &Game,
             _threshold: usize,
             _f_cost: usize,
