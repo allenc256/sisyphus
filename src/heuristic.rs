@@ -122,7 +122,7 @@ impl GreedyHeuristic {
         box_idx: usize,
         distances: &mut [[u16; MAX_SIZE]; MAX_SIZE],
     ) {
-        let start_pos = game.box_start_pos(box_idx);
+        let start_pos = game.start_pos(box_idx);
         let mut queue = VecDeque::new();
         queue.push_back((start_pos.0, start_pos.1));
         distances[start_pos.1 as usize][start_pos.0 as usize] = 0;

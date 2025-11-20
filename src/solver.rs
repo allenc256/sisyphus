@@ -499,7 +499,6 @@ mod tests {
         let mut solver = new_solver(&game);
         let result = solver.solve();
 
-        assert!(matches!(result, SolveResult::Solved(_)));
         if let SolveResult::Solved(moves) = result {
             assert_eq!(moves.len(), 1);
 
@@ -509,6 +508,8 @@ mod tests {
                 test_game.push_by_pos(push.box_x(), push.box_y(), push.direction());
             }
             assert!(test_game.is_solved());
+        } else {
+            panic!();
         }
     }
 
