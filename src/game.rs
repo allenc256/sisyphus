@@ -1,5 +1,5 @@
-pub use crate::bits::Position;
-use crate::bits::{Bitvector, BitvectorIter, Index, LazyBitboard};
+use crate::bits::{Bitvector, BitvectorIter, LazyBitboard};
+pub use crate::bits::{Index, Position};
 use arrayvec::ArrayVec;
 use std::{fmt, marker::PhantomData};
 
@@ -98,6 +98,13 @@ pub struct Pull {
 }
 
 impl Push {
+    pub fn new(box_index: Index, direction: Direction) -> Self {
+        Self {
+            box_index,
+            direction,
+        }
+    }
+
     pub fn to_pull(self) -> Pull {
         Pull {
             box_index: self.box_index,
@@ -445,6 +452,14 @@ impl Game {
 
     pub fn goal_positions(&self) -> &[Position] {
         &self.goal_positions
+    }
+
+    pub fn width(&self) -> u8 {
+        self.width
+    }
+
+    pub fn height(&self) -> u8 {
+        self.height
     }
 
     /// Get the box index at the given position, if any.

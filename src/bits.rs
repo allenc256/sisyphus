@@ -103,6 +103,30 @@ impl LazyBitboard {
             *self.data[y].as_mut_ptr() |= 1u64 << pos.0;
         }
     }
+
+    pub fn clear(&mut self) {
+        self.initialized = 0;
+    }
+}
+
+pub struct Bitboard {
+    data: [u64; 64],
+}
+
+impl Bitboard {
+    pub fn new() -> Self {
+        Self { data: [0u64; 64] }
+    }
+
+    pub fn get(&self, pos: Position) -> bool {
+        debug_assert!(pos.0 < 64 && pos.1 < 64, "position out of bounds");
+        self.data[pos.1 as usize] & (1u64 << pos.0) != 0
+    }
+
+    pub fn set(&mut self, pos: Position) {
+        debug_assert!(pos.0 < 64 && pos.1 < 64, "position out of bounds");
+        self.data[pos.1 as usize] |= 1u64 << pos.0;
+    }
 }
 
 #[cfg(test)]
