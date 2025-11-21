@@ -32,6 +32,14 @@ impl Bitvector {
         self.bits |= 1u64 << index.0;
     }
 
+    pub fn add_all(&mut self, other: &Bitvector) {
+        self.bits |= other.bits;
+    }
+
+    pub fn remove_all(&mut self, other: &Bitvector) {
+        self.bits &= !other.bits;
+    }
+
     pub fn is_empty(&self) -> bool {
         self.bits == 0
     }
@@ -44,6 +52,10 @@ impl Bitvector {
         Bitvector {
             bits: self.bits | other.bits,
         }
+    }
+
+    pub fn contains_all(&self, other: &Bitvector) -> bool {
+        (self.bits & other.bits) == other.bits
     }
 
     pub fn iter(&self) -> BitvectorIter {
@@ -102,30 +114,6 @@ impl LazyBitboard {
         unsafe {
             *self.data[y].as_mut_ptr() |= 1u64 << pos.0;
         }
-    }
-
-    pub fn clear(&mut self) {
-        self.initialized = 0;
-    }
-}
-
-pub struct Bitboard {
-    data: [u64; 64],
-}
-
-impl Bitboard {
-    pub fn new() -> Self {
-        Self { data: [0u64; 64] }
-    }
-
-    pub fn get(&self, pos: Position) -> bool {
-        debug_assert!(pos.0 < 64 && pos.1 < 64, "position out of bounds");
-        self.data[pos.1 as usize] & (1u64 << pos.0) != 0
-    }
-
-    pub fn set(&mut self, pos: Position) {
-        debug_assert!(pos.0 < 64 && pos.1 < 64, "position out of bounds");
-        self.data[pos.1 as usize] |= 1u64 << pos.0;
     }
 }
 
@@ -211,5 +199,38 @@ mod tests {
         let indexes: Vec<Index> = bv.iter().collect();
         assert_eq!(indexes.len(), 64);
         assert_eq!(indexes, (0..64).map(|i| Index(i as u8)).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn test_bitvector_contains_all() {
+        let mut bv1 = Bitvector::new();
+        bv1.add(Index(0));
+        bv1.add(Index(5));
+        bv1.add(Index(10));
+
+        let mut bv2 = Bitvector::new();
+        bv2.add(Index(0));
+        bv2.add(Index(5));
+
+        // bv1 contains all of bv2
+        assert!(bv1.contains_all(&bv2));
+        // bv2 does not contain all of bv1
+        assert!(!bv2.contains_all(&bv1));
+
+        // A bitvector contains all of itself
+        assert!(bv1.contains_all(&bv1));
+        assert!(bv2.contains_all(&bv2));
+
+        // Empty bitvector is contained by all
+        let empty = Bitvector::new();
+        assert!(bv1.contains_all(&empty));
+        assert!(bv2.contains_all(&empty));
+
+        // But empty doesn't contain non-empty
+        assert!(!empty.contains_all(&bv1));
+        assert!(!empty.contains_all(&bv2));
+
+        // Empty contains empty
+        assert!(empty.contains_all(&empty));
     }
 }

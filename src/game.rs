@@ -114,6 +114,13 @@ impl Push {
 }
 
 impl Pull {
+    pub fn new(box_index: Index, direction: Direction) -> Self {
+        Self {
+            box_index,
+            direction,
+        }
+    }
+
     pub fn to_push(self) -> Push {
         Push {
             box_index: self.box_index,
@@ -452,14 +459,6 @@ impl Game {
 
     pub fn goal_positions(&self) -> &[Position] {
         &self.goal_positions
-    }
-
-    pub fn width(&self) -> u8 {
-        self.width
-    }
-
-    pub fn height(&self) -> u8 {
-        self.height
     }
 
     /// Get the box index at the given position, if any.

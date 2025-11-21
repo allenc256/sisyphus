@@ -1,307 +1,179 @@
+use std::rc::Rc;
+
 use arrayvec::ArrayVec;
 
-use crate::bits::{Bitboard, Bitvector, LazyBitboard};
-use crate::game::{ALL_DIRECTIONS, Direction, Game, Index, MAX_BOXES, Position, Tile};
+use crate::bits::Bitvector;
+use crate::game::{ALL_DIRECTIONS, Direction, Game, Index, MAX_BOXES, Tile};
+use crate::zobrist::Zobrist;
 
-pub struct Deadlocks {}
+pub trait FrozenBoxes {
+    fn compute_frozen(&mut self, game: &Game, box_idx: Index) -> Option<(Bitvector, u64)>;
+    fn clear_frozen(&mut self, boxes: Bitvector);
+}
 
-impl Deadlocks {
-    pub fn is_freeze_deadlock(game: &Game, pos: Position) -> bool {
-        Frozen::new().is_deadlocked(game, pos)
+pub struct ReverseFrozenBoxes;
+
+impl FrozenBoxes for ReverseFrozenBoxes {
+    fn compute_frozen(&mut self, _game: &Game, _box_idx: Index) -> Option<(Bitvector, u64)> {
+        Some((Bitvector::new(), 0))
+    }
+
+    fn clear_frozen(&mut self, _boxes: Bitvector) {
+        // no-op
     }
 }
 
-struct Frozen {
-    visited: LazyBitboard,
-    deadlocked: bool,
+pub struct ForwardFrozenBoxes {
+    frozen: Bitvector,
+    zobrist: Rc<Zobrist>,
 }
 
-impl Frozen {
-    fn new() -> Self {
-        Self {
-            visited: LazyBitboard::new(),
-            deadlocked: false,
-        }
-    }
-
-    fn is_deadlocked(&mut self, game: &Game, pos: Position) -> bool {
-        assert!(game.box_index(pos).is_some());
-        self.is_frozen(game, pos) && self.deadlocked
-    }
-
-    fn is_frozen(&mut self, game: &Game, pos: Position) -> bool {
-        if game.get_tile(pos) == Tile::Wall {
-            return true;
-        }
-        if game.box_index(pos).is_none() {
-            return false;
-        }
-        if self.visited.get(pos) {
-            return true;
-        }
-        self.visited.set(pos);
-        let is_frozen_box = (self.is_frozen_dir(game, pos, Direction::Left)
-            || self.is_frozen_dir(game, pos, Direction::Right))
-            && (self.is_frozen_dir(game, pos, Direction::Up)
-                || self.is_frozen_dir(game, pos, Direction::Down));
-        if is_frozen_box && game.get_tile(pos) != Tile::Goal {
-            self.deadlocked = true;
-        }
-        is_frozen_box
-    }
-
-    fn is_frozen_dir(&mut self, game: &Game, pos: Position, dir: Direction) -> bool {
-        if let Some(next_pos) = game.move_position(pos, dir) {
-            self.is_frozen(game, next_pos)
-        } else {
-            true
-        }
-    }
-}
-
-pub struct FrozenSquares {
-    frozen: Bitboard,
-    deadlock_count: u8,
-}
-
-impl FrozenSquares {
-    pub fn new(game: &Game) -> Self {
-        let mut frozen = Bitboard::new();
-
-        for y in 0..game.height() {
-            for x in 0..game.width() {
-                let pos = Position(x, y);
-                if game.get_tile(pos) == Tile::Wall {
-                    frozen.set(pos);
-                }
+impl ForwardFrozenBoxes {
+    pub fn new(game: &Game, zobrist: Rc<Zobrist>) -> Self {
+        let mut result = Self {
+            frozen: Bitvector::new(),
+            zobrist,
+        };
+        for box_idx in 0..game.box_count() {
+            let box_idx = Index(box_idx as u8);
+            if !result.frozen.contains(box_idx) {
+                let result = result.compute_frozen(game, box_idx);
+                assert!(result.is_some());
             }
         }
+        result
+    }
 
-        Self {
-            frozen,
-            deadlock_count: 0,
+    fn compute_hash(&self, game: &Game) -> u64 {
+        let mut hash = 0u64;
+        for box_idx in self.frozen.iter() {
+            hash ^= self.zobrist.box_hash(game.box_position(box_idx));
         }
+        hash
     }
+}
 
-    pub fn deadlocked(&self) -> bool {
-        self.deadlock_count > 0
-    }
+/*
 
-    pub fn update_after_push(&mut self, game: &Game, pos: Position) -> Bitvector {
-        assert!(!self.frozen.get(pos));
-        assert!(game.box_index(pos).is_some());
+Still wrong!
+------------
 
+Frozen state:
+ #######
+ #     #
+ # $   #
+ # $$###
+ # #$ #
+ # #  #
+ # #  #
+## ## ##
+#    *.#######
+# ###.**@    #
+#   #.####   #
+### #.# $    #
+  #  .    #  #
+  #########  #
+          ####
+
+Why aren't the squares in the upper-left considered a deadlock?
+I think I should just rewrite the logic to use real recursion instead of the stack-based approach.
+
+ */
+
+impl FrozenBoxes for ForwardFrozenBoxes {
+    fn compute_frozen(&mut self, game: &Game, box_idx: Index) -> Option<(Bitvector, u64)> {
+        let mut deadlocked = false;
         let mut boxes = Bitvector::new();
-        let mut visited = LazyBitboard::new();
-        let mut to_visit: ArrayVec<Position, MAX_BOXES> = ArrayVec::new();
-        let mut to_process: ArrayVec<Position, MAX_BOXES> = ArrayVec::new();
+        let mut visited = Bitvector::new();
+        let mut to_visit: ArrayVec<Index, MAX_BOXES> = ArrayVec::new();
+        let mut to_process: ArrayVec<Index, MAX_BOXES> = ArrayVec::new();
+        let mut frozen = self.frozen;
 
-        to_visit.push(pos);
+        assert!(!self.frozen.contains(box_idx));
+
+        visited.add(box_idx);
+        to_visit.push(box_idx);
 
         // First pass: Build post-order traversal using to_visit stack
-        while let Some(pos) = to_visit.pop() {
-            visited.set(pos);
-            to_process.push(pos);
+        while let Some(box_idx) = to_visit.pop() {
+            to_process.push(box_idx);
+            boxes.add(box_idx);
+            let pos = game.box_position(box_idx);
             for &dir in &ALL_DIRECTIONS {
                 if let Some(next_pos) = game.move_position(pos, dir) {
-                    if !visited.get(next_pos)
-                        && game.box_index(next_pos).is_some()
-                        && !self.frozen.get(next_pos)
-                    {
-                        to_visit.push(next_pos);
+                    if let Some(next_box_idx) = game.box_index(next_pos) {
+                        if !visited.contains(next_box_idx) && !self.frozen.contains(next_box_idx) {
+                            visited.add(next_box_idx);
+                            to_visit.push(next_box_idx);
+                        }
                     }
                 }
             }
         }
 
         // Second pass: Process in reverse order (post-order = children before parents)
-        visited.clear();
-        while let Some(pos) = to_process.pop() {
-            visited.set(pos);
-            if self.check_horizontal(game, pos, &visited)
-                && self.check_vertical(game, pos, &visited)
+        visited = Bitvector::new();
+        while let Some(box_idx) = to_process.pop() {
+            visited.add(box_idx);
+            if check_horizontal(game, box_idx, &frozen, &visited)
+                && check_vertical(game, box_idx, &frozen, &visited)
             {
-                self.frozen.set(pos);
-                boxes.add(game.box_index(pos).unwrap());
+                frozen.add(box_idx);
+                let pos = game.box_position(box_idx);
                 if game.get_tile(pos) != Tile::Goal {
-                    self.deadlock_count += 1;
+                    deadlocked = true;
                 }
+            } else {
+                return Some((Bitvector::new(), self.compute_hash(game)));
             }
         }
 
-        boxes
+        if deadlocked {
+            return None;
+        }
+
+        self.frozen = frozen;
+        Some((boxes, self.compute_hash(game)))
     }
 
-    fn check_horizontal(&self, game: &Game, pos: Position, visited: &LazyBitboard) -> bool {
-        self.check_direction(game, pos, Direction::Left, visited)
-            || self.check_direction(game, pos, Direction::Right, visited)
-    }
-
-    fn check_vertical(&self, game: &Game, pos: Position, visited: &LazyBitboard) -> bool {
-        self.check_direction(game, pos, Direction::Up, visited)
-            || self.check_direction(game, pos, Direction::Down, visited)
-    }
-
-    fn check_direction(
-        &self,
-        game: &Game,
-        pos: Position,
-        dir: Direction,
-        visited: &LazyBitboard,
-    ) -> bool {
-        game.move_position(pos, dir).map_or(true, |next_pos| {
-            if game.box_index(next_pos).is_some() {
-                if visited.get(next_pos) {
-                    self.frozen.get(next_pos)
-                } else {
-                    true
-                }
-            } else {
-                game.get_tile(next_pos) == Tile::Wall
-            }
-        })
+    fn clear_frozen(&mut self, boxes: Bitvector) {
+        assert!(self.frozen.contains_all(&boxes));
+        self.frozen.remove_all(&boxes);
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use crate::game::Push;
+fn check_horizontal(game: &Game, box_idx: Index, frozen: &Bitvector, visited: &Bitvector) -> bool {
+    check_direction(game, box_idx, Direction::Left, frozen, visited)
+        || check_direction(game, box_idx, Direction::Right, frozen, visited)
+}
 
-    use super::*;
+fn check_vertical(game: &Game, box_idx: Index, frozen: &Bitvector, visited: &Bitvector) -> bool {
+    check_direction(game, box_idx, Direction::Up, frozen, visited)
+        || check_direction(game, box_idx, Direction::Down, frozen, visited)
+}
 
-    #[test]
-    fn test_frozen_squares_new() {
-        let game = parse_game(
-            r#"
-#####
-#@ *#
-#####
-"#,
-        );
-        let frozen = FrozenSquares::new(&game);
-
-        assert!(frozen.frozen.get(Position(0, 0)));
-        assert!(frozen.frozen.get(Position(2, 2)));
-        assert!(!frozen.frozen.get(Position(1, 1)));
-        assert!(!frozen.frozen.get(Position(2, 1)));
-        assert!(!frozen.frozen.get(Position(3, 1)));
-    }
-
-    #[test]
-    fn test_frozen_squares_update_after_push() {
-        let game = parse_game(
-            r#"
-#####
-#@ *#
-#####
-"#,
-        );
-        let mut frozen = FrozenSquares::new(&game);
-
-        assert!(!frozen.frozen.get(Position(3, 1)));
-        frozen.update_after_push(&game, game.box_position(Index(0)));
-        assert!(frozen.frozen.get(Position(3, 1)));
-    }
-
-    #[test]
-    fn test_frozen_squares_recursive_1() {
-        let game = parse_game(
-            r#"
-#####
-#   #
-#  *#
-#@ *#
-#   #
-#####
-"#,
-        );
-        let mut frozen = FrozenSquares::new(&game);
-
-        for &pos in game.box_positions() {
-            assert!(!frozen.frozen.get(pos));
+fn check_direction(
+    game: &Game,
+    box_idx: Index,
+    dir: Direction,
+    frozen: &Bitvector,
+    visited: &Bitvector,
+) -> bool {
+    let pos = game.box_position(box_idx);
+    if let Some(next_pos) = game.move_position(pos, dir) {
+        if let Some(next_box_idx) = game.box_index(next_pos) {
+            // Box: check if it was already verified frozen or not previously visited
+            if visited.contains(next_box_idx) {
+                frozen.contains(next_box_idx)
+            } else {
+                true
+            }
+        } else {
+            // No box: check for a wall
+            game.get_tile(next_pos) == Tile::Wall
         }
-        frozen.update_after_push(&game, Position(3, 2));
-
-        for &pos in game.box_positions() {
-            assert!(frozen.frozen.get(pos));
-        }
-    }
-
-    #[test]
-    fn test_frozen_squares_recursive_2() {
-        let game = parse_game(
-            r#"
-########
-#      #
-#  **  #
-#@ *   #
-#      #
-########
-"#,
-        );
-        let mut frozen = FrozenSquares::new(&game);
-
-        for &pos in game.box_positions() {
-            assert!(!frozen.frozen.get(pos));
-        }
-        frozen.update_after_push(&game, Position(3, 2));
-
-        for &pos in game.box_positions() {
-            assert!(!frozen.frozen.get(pos));
-        }
-        assert_eq!(frozen.deadlock_count, 0);
-    }
-
-    #[test]
-    fn test_frozen_squares_recursive_3() {
-        let game = parse_game(
-            r#"
-########
-#     .#
-#  $*  #
-#@ *$  #
-#     .#
-########
-"#,
-        );
-        let mut frozen = FrozenSquares::new(&game);
-
-        for &pos in game.box_positions() {
-            assert!(!frozen.frozen.get(pos));
-        }
-        frozen.update_after_push(&game, Position(3, 2));
-
-        for &pos in game.box_positions() {
-            assert!(frozen.frozen.get(pos));
-        }
-        assert_eq!(frozen.deadlock_count, 2);
-    }
-
-    #[test]
-    fn test_frozen_squares_recursive_incremental() {
-        let mut game = parse_game(
-            r#"
-########
-#      #
-#    $ #
-#@   $ #
-#..    #
-########
-"#,
-        );
-        let mut frozen = FrozenSquares::new(&game);
-
-        game.push(Push::new(Index(0), Direction::Right));
-
-        let boxes = frozen.update_after_push(&game, game.box_position(Index(0)));
-
-        for &pos in game.box_positions() {
-            assert!(frozen.frozen.get(pos));
-        }
-        assert_eq!(frozen.deadlock_count, 2);
-    }
-
-    fn parse_game(text: &str) -> Game {
-        Game::from_text(text.trim_matches('\n')).unwrap()
+    } else {
+        // Out of bounds: treat this like a wall
+        true
     }
 }

@@ -147,6 +147,7 @@ fn solve_level_helper<H: Heuristic>(
     let result = solver.solve();
     let elapsed = start.elapsed();
     let (nodes_forwards, nodes_backwards) = solver.nodes_explored();
+    let frozen_states = solver.frozen_states();
 
     let total_states = nodes_forwards + nodes_backwards;
     let elapsed_ms = elapsed.as_millis();
@@ -158,8 +159,8 @@ fn solve_level_helper<H: Heuristic>(
     };
 
     println!(
-        "level: {:<3}  solved: {}  steps: {:<5}  states: {:<12}  elapsed: {} ms",
-        opts.level_num, solved_char, solution_len, total_states, elapsed_ms
+        "level: {:<3}  solved: {}  steps: {:<5}  states: {:<12}  frozen: {:<12}  elapsed: {} ms",
+        opts.level_num, solved_char, solution_len, total_states, frozen_states, elapsed_ms
     );
 
     if opts.print_solution {
