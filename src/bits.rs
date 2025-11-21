@@ -17,6 +17,12 @@ pub struct Bitvector {
     bits: u64,
 }
 
+impl fmt::Display for Bitvector {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{:064b}", self.bits)
+    }
+}
+
 impl Bitvector {
     pub fn new() -> Self {
         Self { bits: 0 }
@@ -30,6 +36,19 @@ impl Bitvector {
     pub fn add(&mut self, index: Index) {
         debug_assert!(index.0 < 64, "index out of bounds");
         self.bits |= 1u64 << index.0;
+    }
+
+    pub fn remove(&mut self, index: Index) {
+        debug_assert!(index.0 < 64, "index out of bounds");
+        self.bits &= !(1u64 << index.0);
+    }
+
+    pub fn add_all(&mut self, other: &Bitvector) {
+        self.bits |= other.bits;
+    }
+
+    pub fn remove_all(&mut self, other: &Bitvector) {
+        self.bits &= !other.bits;
     }
 
     pub fn is_empty(&self) -> bool {
@@ -46,8 +65,26 @@ impl Bitvector {
         }
     }
 
+    pub fn contains_all(&self, other: &Bitvector) -> bool {
+        (self.bits & other.bits) == other.bits
+    }
+
+    pub fn contains_any(&self, other: &Bitvector) -> bool {
+        (self.bits & other.bits) != 0
+    }
+
     pub fn iter(&self) -> BitvectorIter {
         BitvectorIter { bits: self.bits }
+    }
+
+    pub fn pop(&mut self) -> Option<Index> {
+        if self.bits == 0 {
+            None
+        } else {
+            let index = self.bits.trailing_zeros() as u8;
+            self.bits &= self.bits - 1; // Clear the lowest set bit
+            Some(Index(index))
+        }
     }
 }
 
@@ -66,6 +103,44 @@ impl Iterator for BitvectorIter {
             self.bits &= self.bits - 1; // Clear the lowest set bit
             Some(Index(index))
         }
+    }
+}
+
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub struct Bitboard {
+    data: [u64; 64],
+}
+
+impl Bitboard {
+    pub fn new() -> Self {
+        Self { data: [0; 64] }
+    }
+
+    pub fn get(&self, pos: Position) -> bool {
+        debug_assert!(pos.0 < 64 && pos.1 < 64, "position out of bounds");
+        (self.data[pos.1 as usize] & (1u64 << pos.0)) != 0
+    }
+
+    pub fn set(&mut self, pos: Position) {
+        debug_assert!(pos.0 < 64 && pos.1 < 64, "position out of bounds");
+        self.data[pos.1 as usize] |= 1u64 << pos.0;
+    }
+
+    pub fn invert(&self) -> Bitboard {
+        let mut result = Bitboard::new();
+        for i in 0..64 {
+            result.data[i] = !self.data[i];
+        }
+        result
+    }
+}
+
+impl fmt::Display for Bitboard {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        for line in self.data {
+            writeln!(f, "{:064b}", line.reverse_bits())?
+        }
+        Ok(())
     }
 }
 
@@ -187,5 +262,38 @@ mod tests {
         let indexes: Vec<Index> = bv.iter().collect();
         assert_eq!(indexes.len(), 64);
         assert_eq!(indexes, (0..64).map(|i| Index(i as u8)).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn test_bitvector_contains_all() {
+        let mut bv1 = Bitvector::new();
+        bv1.add(Index(0));
+        bv1.add(Index(5));
+        bv1.add(Index(10));
+
+        let mut bv2 = Bitvector::new();
+        bv2.add(Index(0));
+        bv2.add(Index(5));
+
+        // bv1 contains all of bv2
+        assert!(bv1.contains_all(&bv2));
+        // bv2 does not contain all of bv1
+        assert!(!bv2.contains_all(&bv1));
+
+        // A bitvector contains all of itself
+        assert!(bv1.contains_all(&bv1));
+        assert!(bv2.contains_all(&bv2));
+
+        // Empty bitvector is contained by all
+        let empty = Bitvector::new();
+        assert!(bv1.contains_all(&empty));
+        assert!(bv2.contains_all(&empty));
+
+        // But empty doesn't contain non-empty
+        assert!(!empty.contains_all(&bv1));
+        assert!(!empty.contains_all(&bv2));
+
+        // Empty contains empty
+        assert!(empty.contains_all(&empty));
     }
 }

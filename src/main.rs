@@ -11,7 +11,7 @@ use game::Game;
 use heuristic::{GreedyHeuristic, Heuristic, NullHeuristic};
 use levels::Levels;
 use solver::{SearchType, SolveResult, Solver};
-use std::{cell::Cell, time::Instant};
+use std::time::Instant;
 
 use crate::{
     game::{Move, Push},
@@ -63,7 +63,6 @@ fn print_solution(game: &Game, solution: &[Push]) {
 }
 
 struct VerboseTracer {
-    trace_count: Cell<usize>,
     trace_start: usize,
     trace_end: usize,
 }
@@ -71,7 +70,6 @@ struct VerboseTracer {
 impl VerboseTracer {
     fn new(from_move: usize, to_move: usize) -> Self {
         Self {
-            trace_count: Cell::new(0),
             trace_start: from_move,
             trace_end: to_move,
         }
@@ -79,22 +77,21 @@ impl VerboseTracer {
 }
 
 impl Tracer for VerboseTracer {
-    fn trace_move<M: Move>(
+    fn trace<M: Move>(
         &self,
         game: &Game,
+        nodes_explored: usize,
         threshold: usize,
         f_cost: usize,
         g_cost: usize,
         move_: &M,
     ) {
-        let new_count = self.trace_count.get() + 1;
-        self.trace_count.set(new_count);
-        if self.trace_start <= new_count && new_count <= self.trace_end {
+        if self.trace_start <= nodes_explored && nodes_explored <= self.trace_end {
             println!(
                 "move={}, pos={}, count={}, f_cost={}, g_cost={}, threshold={}:\n{}",
                 move_,
                 game.box_position(move_.box_index()),
-                new_count,
+                nodes_explored,
                 f_cost,
                 g_cost,
                 threshold,
@@ -161,6 +158,12 @@ fn solve_level_helper<H: Heuristic>(
         "level: {:<3}  solved: {}  steps: {:<5}  states: {:<12}  elapsed: {} ms",
         opts.level_num, solved_char, solution_len, total_states, elapsed_ms
     );
+
+    // if solved_char != 'Y' {
+    //     for (hash, count) in solver.frozen_counts.iter() {
+    //         println!("{:016x}: {}", hash, count);
+    //     }
+    // }
 
     if opts.print_solution {
         if let SolveResult::Solved(solution) = result {

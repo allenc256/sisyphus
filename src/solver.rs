@@ -1,4 +1,5 @@
-use crate::deadlocks::Deadlocks;
+use crate::bits::{Bitvector, Index};
+use crate::deadlocks::{compute_frozen_boxes, compute_new_frozen_boxes};
 use crate::game::{Direction, Game, Move, Moves, Position, Pull, Push};
 use crate::heuristic::Heuristic;
 use crate::zobrist::Zobrist;
@@ -47,6 +48,7 @@ struct Searcher<H: Heuristic, T: Tracer, S: SearchHelper> {
     initial_hash: u64,
     initial_boxes_hash: u64,
     freeze_deadlocks: bool,
+    // frozen_counts: HashMap<u64, usize>,
     tracer: Option<Rc<T>>,
     helper: S,
 }
@@ -60,6 +62,12 @@ trait SearchHelper {
     fn compute_unmoves(&self, game: &Game) -> Moves<Self::Move>;
     fn apply_move(&self, game: &mut Game, move_: &Self::Move);
     fn unapply_move(&self, game: &mut Game, move_: &Self::Move);
+    fn compute_new_frozen_boxes(
+        &self,
+        frozen: &Bitvector,
+        game: &Game,
+        box_idx: Index,
+    ) -> Bitvector;
 }
 
 struct ForwardsSearchHelper {
@@ -83,9 +91,10 @@ pub struct Solver<H: Heuristic, T: Tracer> {
 }
 
 pub trait Tracer {
-    fn trace_move<M: Move>(
+    fn trace<M: Move>(
         &self,
         game: &Game,
+        nodes_explored: usize,
         threshold: usize,
         f_cost: usize,
         g_cost: usize,
@@ -121,6 +130,7 @@ impl<H: Heuristic, T: Tracer, S: SearchHelper> Searcher<H, T, S> {
             initial_hash,
             initial_boxes_hash,
             freeze_deadlocks,
+            // frozen_counts: HashMap::new(),
             tracer,
             helper,
         };
@@ -140,14 +150,30 @@ impl<H: Heuristic, T: Tracer, S: SearchHelper> Searcher<H, T, S> {
     {
         let mut game = self.initial_game.clone();
         self.reset();
-        self.search_helper(
-            &mut game,
-            0,
-            threshold,
-            target_check,
-            self.initial_boxes_hash,
-            0,
-        )
+
+        if self.freeze_deadlocks {
+            let mut frozen_boxes = compute_frozen_boxes(&game);
+            self.search_helper(
+                &mut game,
+                &mut frozen_boxes,
+                0,
+                threshold,
+                target_check,
+                self.initial_boxes_hash,
+                0,
+            )
+        } else {
+            let mut frozen_boxes = Bitvector::new();
+            self.search_helper(
+                &mut game,
+                &mut frozen_boxes,
+                0,
+                threshold,
+                target_check,
+                self.initial_boxes_hash,
+                0,
+            )
+        }
     }
 
     fn reset(&mut self) {
@@ -168,9 +194,11 @@ impl<H: Heuristic, T: Tracer, S: SearchHelper> Searcher<H, T, S> {
 
     /// Perform DFS A* search up to the specified threshold
     /// Returns SearchResult. If found, use reconstruct_solution to get the solution path.
+    #[allow(clippy::too_many_arguments)]
     fn search_helper<F>(
         &mut self,
         game: &mut Game,
+        frozen_boxes: &mut Bitvector,
         g_cost: usize,
         threshold: usize,
         target_check: &F,
@@ -236,13 +264,26 @@ impl<H: Heuristic, T: Tracer, S: SearchHelper> Searcher<H, T, S> {
             let new_box_pos = game.box_position(move_.box_index());
 
             if let Some(tracer) = &self.tracer {
-                tracer.trace_move(game, threshold, f_cost, g_cost, &move_);
+                tracer.trace(game, self.nodes_explored, threshold, f_cost, g_cost, &move_);
             }
 
-            if self.freeze_deadlocks && Deadlocks::is_freeze_deadlock(game, new_box_pos) {
+            // Compute frozen boxes
+            let new_frozen =
+                self.helper
+                    .compute_new_frozen_boxes(frozen_boxes, game, move_.box_index());
+            if game.unsolved_boxes().contains_any(&new_frozen) {
+                // Deadlock
                 self.helper.unapply_move(game, &move_);
                 continue;
             }
+
+            frozen_boxes.add_all(&new_frozen);
+
+            // let mut frozen_hash = 0;
+            // for box_idx in frozen_boxes.iter() {
+            //     frozen_hash ^= self.zobrist.box_hash(game.box_position(box_idx));
+            // }
+            // *self.frozen_counts.entry(frozen_hash).or_default() += 1;
 
             // Update boxes hash (unhash old position, hash new position)
             let new_boxes_hash = boxes_hash
@@ -251,6 +292,7 @@ impl<H: Heuristic, T: Tracer, S: SearchHelper> Searcher<H, T, S> {
 
             let child_result = self.search_helper(
                 game,
+                frozen_boxes,
                 g_cost + 1,
                 threshold,
                 target_check,
@@ -260,6 +302,8 @@ impl<H: Heuristic, T: Tracer, S: SearchHelper> Searcher<H, T, S> {
             if let SearchResult::Solved(_) = child_result {
                 return child_result;
             }
+
+            frozen_boxes.remove_all(&new_frozen);
 
             self.helper.unapply_move(game, &move_);
 
@@ -360,6 +404,15 @@ impl SearchHelper for ForwardsSearchHelper {
     fn unapply_move(&self, game: &mut Game, push: &Push) {
         game.pull(push.to_pull());
     }
+
+    fn compute_new_frozen_boxes(
+        &self,
+        frozen: &Bitvector,
+        game: &Game,
+        box_idx: Index,
+    ) -> Bitvector {
+        compute_new_frozen_boxes(*frozen, game, box_idx)
+    }
 }
 
 impl SearchHelper for BackwardsSearchHelper {
@@ -374,11 +427,20 @@ impl SearchHelper for BackwardsSearchHelper {
     }
 
     fn apply_move(&self, game: &mut Game, pull: &Pull) {
-        game.pull(*pull)
+        game.pull(*pull);
     }
 
     fn unapply_move(&self, game: &mut Game, pull: &Pull) {
         game.push(pull.to_push())
+    }
+
+    fn compute_new_frozen_boxes(
+        &self,
+        _frozen: &Bitvector,
+        _game: &Game,
+        _box_idx: Index,
+    ) -> Bitvector {
+        Bitvector::new()
     }
 }
 
@@ -413,7 +475,7 @@ impl<H: Heuristic, T: Tracer> Solver<H, T> {
                 max_nodes_explored,
                 reverse_heuristic,
                 goal_state,
-                freeze_deadlocks,
+                false,
                 tracer,
                 BackwardsSearchHelper,
             ),
@@ -530,11 +592,14 @@ mod tests {
 
     #[test]
     fn test_solve_simple() {
-        let input = "####\n\
-                     #@$.#\n\
-                     ####";
-        let game = Game::from_text(input).unwrap();
-        let mut solver = new_solver(game);
+        let game = parse_game(
+            r#"
+#####
+#@$.#
+#####
+"#,
+        );
+        let mut solver = new_solver(game.clone());
         let result = solver.solve();
 
         assert!(matches!(result, SolveResult::Solved(_)));
@@ -542,7 +607,7 @@ mod tests {
             assert_eq!(soln.len(), 1);
 
             // Verify solution works
-            let mut test_game = Game::from_text(input).unwrap();
+            let mut test_game = game.clone();
             for push in soln {
                 test_game.push(push);
             }
@@ -589,21 +654,29 @@ mod tests {
 
     #[test]
     fn test_solve_impossible() {
-        let input = "#####\n\
-                     #@$#.#\n\
-                     #####";
-        let game = Game::from_text(input).unwrap();
+        let game = parse_game(
+            r#"
+#######
+#@$ #.#
+#######
+"#,
+        );
         let mut solver = new_solver(game);
         let result = solver.solve();
         assert_eq!(result, SolveResult::Impossible);
     }
 
+    fn parse_game(text: &str) -> Game {
+        Game::from_text(text.trim_matches('\n')).unwrap()
+    }
+
     struct NullTracer {}
 
     impl Tracer for NullTracer {
-        fn trace_move<M: Move>(
+        fn trace<M: Move>(
             &self,
             _game: &Game,
+            _nodes_explored: usize,
             _threshold: usize,
             _f_cost: usize,
             _g_cost: usize,
