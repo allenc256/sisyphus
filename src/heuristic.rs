@@ -86,6 +86,9 @@ impl Heuristic for SimpleHeuristic {
     }
 }
 
+/// Heuristic which attempts to match boxes and goals greedily to find a minimum
+/// cost matching. Runs in O(n^2) rather than O(n^3) required by the optimal
+/// approach.
 pub struct GreedyHeuristic {
     /// distances[idx][y][x] = minimum pushes/pulls to get a box from (x, y) to destination idx
     distances: Box<[[[u16; MAX_SIZE]; MAX_SIZE]; MAX_BOXES]>,
@@ -107,9 +110,10 @@ impl Heuristic for GreedyHeuristic {
     fn compute(&self, game: &Game) -> Option<u16> {
         const M: usize = MAX_BOXES * MAX_BOXES;
         const N: usize = MAX_SIZE * MAX_SIZE;
-        let mut all_pairs: ArrayVec<(u16, Index, Index), M> = ArrayVec::new();
         let box_count = game.box_count();
 
+        // Compute all pairs of distances between boxes <-> destinations
+        let mut all_pairs: ArrayVec<(u16, Index, Index), M> = ArrayVec::new();
         for (box_idx, &pos) in game.box_positions().iter().enumerate() {
             let box_idx = Index(box_idx as u8);
             for dst_idx in 0..box_count {
@@ -121,32 +125,54 @@ impl Heuristic for GreedyHeuristic {
             }
         }
 
+        // Perform counting sort over distances (testing w/ built-in sorts
+        // indicate they are too slow in comparison)
         counting_sort::<_, _, N>(&mut all_pairs, |&(distance, _, _)| distance as usize);
 
+        // Walk through sorted pairs and start matching things up
         let mut total_distance = 0;
-        let mut matched_boxes = Bitvector::new();
-        let mut matched_dsts = Bitvector::new();
+        let mut unmatched_boxes = Bitvector::full(box_count as u8);
+        let mut unmatched_dsts = Bitvector::full(box_count as u8);
         for (distance, box_idx, dst_idx) in all_pairs {
-            if !matched_boxes.contains(box_idx) && !matched_dsts.contains(dst_idx) {
+            if unmatched_boxes.contains(box_idx) && unmatched_dsts.contains(dst_idx) {
                 total_distance += distance;
-                matched_boxes.add(box_idx);
-                matched_dsts.add(dst_idx);
+                unmatched_boxes.remove(box_idx);
+                unmatched_dsts.remove(dst_idx);
             }
         }
 
-        for (box_idx, &pos) in game.box_positions().iter().enumerate() {
-            let box_idx = Index(box_idx as u8);
-            if !matched_boxes.contains(box_idx) {
-                let min_distance = (0..box_count)
-                    .map(|dst_idx| self.distances[dst_idx][pos.1 as usize][pos.0 as usize])
-                    .min()
-                    .unwrap();
-                if min_distance == u16::MAX {
-                    return None;
-                }
-                total_distance += min_distance;
+        // Compute distance lower bound for unmatched boxes -> goals
+        let mut unmatched_box_to_dst = 0;
+        for box_idx in unmatched_boxes.iter() {
+            let pos = game.box_position(box_idx);
+            let min_distance = (0..box_count)
+                .map(|dst_idx| self.distances[dst_idx][pos.1 as usize][pos.0 as usize])
+                .min()
+                .unwrap();
+            if min_distance == u16::MAX {
+                return None;
             }
+            unmatched_box_to_dst += min_distance;
         }
+
+        // Compute distance lower bound for unmatched goals -> boxes
+        let mut unmatched_dst_to_box = 0;
+        for dst_idx in unmatched_dsts.iter() {
+            let min_distance = game
+                .box_positions()
+                .iter()
+                .map(|pos| self.distances[dst_idx.0 as usize][pos.1 as usize][pos.0 as usize])
+                .min()
+                .unwrap();
+            if min_distance == u16::MAX {
+                return None;
+            }
+            unmatched_dst_to_box += min_distance;
+        }
+
+        // Add distance for unmatched boxes <-> goals (pick whichever lower
+        // bound is higher)
+        total_distance += std::cmp::max(unmatched_box_to_dst, unmatched_dst_to_box);
 
         Some(total_distance)
     }
@@ -230,6 +256,7 @@ fn bfs_pushes(game: &Game, start_pos: Position, distances: &mut [[u16; MAX_SIZE]
     }
 }
 
+// This counting sort implementation assumes that all counts can fit in a u16!
 fn counting_sort<T, F, const N: usize>(arr: &mut [T], key_fn: F)
 where
     F: Fn(&T) -> usize,
@@ -254,6 +281,7 @@ where
     // We use `max_key + 1` because the range is inclusive (0..=k)
     for item in arr.iter() {
         let key = key_fn(item);
+        debug_assert!(counts[key] < u16::MAX);
         counts[key] += 1;
     }
 
