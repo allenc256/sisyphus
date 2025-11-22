@@ -15,12 +15,14 @@ use std::time::Instant;
 
 use crate::{
     game::{Move, Push},
+    heuristic::GreedyHeuristic,
     solver::Tracer,
 };
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
 enum HeuristicType {
     Simple,
+    Greedy,
     Null,
 }
 
@@ -187,6 +189,12 @@ fn solve_level(game: &Game, opts: SolveOpts, heuristic_type: HeuristicType) -> L
             SimpleHeuristic::new_forward(game),
             SimpleHeuristic::new_reverse(game),
         ),
+        HeuristicType::Greedy => solve_level_helper(
+            game,
+            opts,
+            GreedyHeuristic::new_forward(game),
+            GreedyHeuristic::new_reverse(game),
+        ),
         HeuristicType::Null => {
             solve_level_helper(game, opts, NullHeuristic::new(), NullHeuristic::new())
         }
@@ -218,7 +226,7 @@ struct Args {
     max_nodes_explored: usize,
 
     /// Heuristic to use for solving
-    #[arg(short = 'H', long, value_enum, default_value = "simple")]
+    #[arg(short = 'H', long, value_enum, default_value = "greedy")]
     heuristic: HeuristicType,
 
     /// Search type

@@ -1,4 +1,9 @@
-use crate::game::{ALL_DIRECTIONS, Game, MAX_BOXES, MAX_SIZE, Position, Tile};
+use arrayvec::ArrayVec;
+
+use crate::{
+    bits::{Bitvector, Index},
+    game::{ALL_DIRECTIONS, Game, MAX_BOXES, MAX_SIZE, Position, Tile},
+};
 use std::collections::VecDeque;
 
 /// Trait for computing heuristics that estimate the number of moves (pushes/pulls) needed.
@@ -81,6 +86,72 @@ impl Heuristic for SimpleHeuristic {
     }
 }
 
+pub struct GreedyHeuristic {
+    /// distances[idx][y][x] = minimum pushes/pulls to get a box from (x, y) to destination idx
+    distances: Box<[[[u16; MAX_SIZE]; MAX_SIZE]; MAX_BOXES]>,
+}
+
+impl GreedyHeuristic {
+    pub fn new_forward(game: &Game) -> Self {
+        let distances = Box::new(compute_distances_from_goals(game));
+        GreedyHeuristic { distances }
+    }
+
+    pub fn new_reverse(game: &Game) -> Self {
+        let distances = Box::new(compute_distances_from_starts(game));
+        GreedyHeuristic { distances }
+    }
+}
+
+impl Heuristic for GreedyHeuristic {
+    fn compute(&self, game: &Game) -> Option<u16> {
+        const M: usize = MAX_BOXES * MAX_BOXES;
+        const N: usize = MAX_SIZE * MAX_SIZE;
+        let mut all_pairs: ArrayVec<(u16, Index, Index), M> = ArrayVec::new();
+        let box_count = game.box_count();
+
+        for (box_idx, &pos) in game.box_positions().iter().enumerate() {
+            let box_idx = Index(box_idx as u8);
+            for dst_idx in 0..box_count {
+                let distance = self.distances[dst_idx][pos.1 as usize][pos.0 as usize];
+                if distance < u16::MAX {
+                    let dst_idx = Index(dst_idx as u8);
+                    all_pairs.push((distance, box_idx, dst_idx));
+                }
+            }
+        }
+
+        counting_sort::<_, _, N>(&mut all_pairs, |&(distance, _, _)| distance as usize);
+
+        let mut total_distance = 0;
+        let mut matched_boxes = Bitvector::new();
+        let mut matched_dsts = Bitvector::new();
+        for (distance, box_idx, dst_idx) in all_pairs {
+            if !matched_boxes.contains(box_idx) && !matched_dsts.contains(dst_idx) {
+                total_distance += distance;
+                matched_boxes.add(box_idx);
+                matched_dsts.add(dst_idx);
+            }
+        }
+
+        for (box_idx, &pos) in game.box_positions().iter().enumerate() {
+            let box_idx = Index(box_idx as u8);
+            if !matched_boxes.contains(box_idx) {
+                let min_distance = (0..box_count)
+                    .map(|dst_idx| self.distances[dst_idx][pos.1 as usize][pos.0 as usize])
+                    .min()
+                    .unwrap();
+                if min_distance == u16::MAX {
+                    return None;
+                }
+                total_distance += min_distance;
+            }
+        }
+
+        Some(total_distance)
+    }
+}
+
 /// Compute push distances from each goal to all positions using BFS with pulls
 fn compute_distances_from_goals(game: &Game) -> [[[u16; MAX_SIZE]; MAX_SIZE]; MAX_BOXES] {
     let mut distances = [[[u16::MAX; MAX_SIZE]; MAX_SIZE]; MAX_BOXES];
@@ -159,8 +230,72 @@ fn bfs_pushes(game: &Game, start_pos: Position, distances: &mut [[u16; MAX_SIZE]
     }
 }
 
+fn counting_sort<T, F, const N: usize>(arr: &mut [T], key_fn: F)
+where
+    F: Fn(&T) -> usize,
+{
+    if arr.len() <= 1 {
+        return;
+    }
+
+    // 1. Compute the maximum key
+    let max_key = arr.iter().map(&key_fn).max().unwrap();
+
+    let mut counts: ArrayVec<u16, N> = ArrayVec::new();
+    let mut starts: ArrayVec<u16, N> = ArrayVec::new();
+    let mut ends: ArrayVec<u16, N> = ArrayVec::new();
+    for _ in 0..=max_key {
+        counts.push(0);
+        starts.push(0);
+        ends.push(0);
+    }
+
+    // 2. Count frequencies
+    // We use `max_key + 1` because the range is inclusive (0..=k)
+    for item in arr.iter() {
+        let key = key_fn(item);
+        counts[key] += 1;
+    }
+
+    // 3. Calculate the starting write index for each key (Prefix Sums).
+    // `starts[i]` tracks the next available slot for key `i`.
+    // `ends[i]` tracks the boundary where bucket `i` ends.
+    let mut current = 0;
+    for i in 0..=max_key {
+        starts[i] = current;
+        current += counts[i];
+        ends[i] = current;
+    }
+
+    // 4. Swap elements into their correct buckets
+    // We iterate through each bucket `i`. While the current write position for bucket `i`
+    // hasn't reached the end of the bucket, we check the element residing there.
+    for i in 0..=max_key {
+        while starts[i] < ends[i] {
+            let current_key = key_fn(&arr[starts[i] as usize]);
+
+            if current_key == i {
+                // This element is already in the correct bucket.
+                // Advance the write pointer for this bucket.
+                starts[i] += 1;
+            } else {
+                // This element belongs to a different bucket (`current_key`).
+                // Swap it to the next available slot in that target bucket.
+                let dest = starts[current_key];
+                arr.swap(starts[i] as usize, dest as usize);
+
+                // Advance the write pointer for the target bucket.
+                starts[current_key] += 1;
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use rand::{Rng, SeedableRng};
+    use rand_chacha::ChaCha8Rng;
+
     use super::*;
 
     #[test]
@@ -200,5 +335,18 @@ mod tests {
         // Two boxes at (2,2) and (3,2), two goals at (2,3) and (3,3)
         // Simple matching should pair them optimally: each box is 1 away from a goal
         assert_eq!(heuristic.compute(&game), Some(2));
+    }
+
+    #[test]
+    fn test_counting_sort_random() {
+        let mut rng = ChaCha8Rng::seed_from_u64(12345);
+
+        for _ in 0..100 {
+            let len = rng.gen_range(0..4096);
+            let max_key = rng.gen_range(1..1024);
+            let mut data: Vec<usize> = (0..len).map(|_| rng.gen_range(0..max_key)).collect();
+            counting_sort::<_, _, 1024>(&mut data, |&x| x);
+            assert!(data.is_sorted(), "Array not sorted: {:?}", data);
+        }
     }
 }
