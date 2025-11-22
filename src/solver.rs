@@ -586,7 +586,7 @@ impl<H: Heuristic, T: Tracer> Solver<H, T> {
 
 #[cfg(test)]
 mod tests {
-    use crate::heuristic::GreedyHeuristic;
+    use crate::heuristic::SimpleHeuristic;
 
     use super::*;
 
@@ -686,11 +686,11 @@ mod tests {
         }
     }
 
-    fn new_solver(game: Game) -> Solver<GreedyHeuristic, NullTracer> {
+    fn new_solver(game: Game) -> Solver<SimpleHeuristic, NullTracer> {
         Solver::new(
             5000000,
-            GreedyHeuristic::new_forward(&game),
-            GreedyHeuristic::new_reverse(&game),
+            SimpleHeuristic::new_forward(&game),
+            SimpleHeuristic::new_reverse(&game),
             SearchType::Forward,
             game,
             true,

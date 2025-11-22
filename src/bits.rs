@@ -28,6 +28,17 @@ impl Bitvector {
         Self { bits: 0 }
     }
 
+    pub fn full(n: u8) -> Self {
+        debug_assert!(n <= 64, "n must be <= 64");
+        if n == 0 {
+            Self { bits: 0 }
+        } else if n >= 64 {
+            Self { bits: u64::MAX }
+        } else {
+            Self { bits: (1u64 << n) - 1 }
+        }
+    }
+
     pub fn contains(&self, index: Index) -> bool {
         debug_assert!(index.0 < 64, "index out of bounds");
         (self.bits & (1u64 << index.0)) != 0
