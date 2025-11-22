@@ -30,97 +30,18 @@ pub struct SimpleHeuristic {
 
 impl SimpleHeuristic {
     pub fn new_forward(game: &Game) -> Self {
-        let distances = Box::new(Self::compute_distances_from_goals(game));
+        let distances = Box::new(compute_distances_from_goals(game));
         SimpleHeuristic { distances }
     }
 
     pub fn new_reverse(game: &Game) -> Self {
-        let distances = Box::new(Self::compute_distances_from_starts(game));
+        let distances = Box::new(compute_distances_from_starts(game));
         SimpleHeuristic { distances }
     }
+}
 
-    /// Compute push distances from each goal to all positions using BFS with pulls
-    fn compute_distances_from_goals(game: &Game) -> [[[u16; MAX_SIZE]; MAX_SIZE]; MAX_BOXES] {
-        let mut distances = [[[u16::MAX; MAX_SIZE]; MAX_SIZE]; MAX_BOXES];
-
-        for (goal_idx, &goal_pos) in game.goal_positions().iter().enumerate() {
-            Self::bfs_pulls(game, goal_pos, &mut distances[goal_idx]);
-        }
-
-        distances
-    }
-
-    /// Compute pull distances from each start position to all positions using BFS with pushes
-    fn compute_distances_from_starts(game: &Game) -> [[[u16; MAX_SIZE]; MAX_SIZE]; MAX_BOXES] {
-        let mut distances = [[[u16::MAX; MAX_SIZE]; MAX_SIZE]; MAX_BOXES];
-
-        for (box_idx, &start_pos) in game.start_positions().iter().enumerate() {
-            Self::bfs_pushes(game, start_pos, &mut distances[box_idx]);
-        }
-
-        distances
-    }
-
-    /// BFS using pulls to compute distances from a goal position
-    fn bfs_pulls(game: &Game, goal_pos: Position, distances: &mut [[u16; MAX_SIZE]; MAX_SIZE]) {
-        let mut queue = VecDeque::new();
-        queue.push_back(goal_pos);
-        distances[goal_pos.1 as usize][goal_pos.0 as usize] = 0;
-
-        while let Some(box_pos) = queue.pop_front() {
-            let dist = distances[box_pos.1 as usize][box_pos.0 as usize];
-
-            for direction in ALL_DIRECTIONS {
-                if let Some(new_box_pos) = game.move_position(box_pos, direction.reverse()) {
-                    if let Some(player_pos) = game.move_position(new_box_pos, direction.reverse()) {
-                        let new_box_tile = game.get_tile(new_box_pos);
-                        let player_tile = game.get_tile(player_pos);
-
-                        if (new_box_tile == Tile::Floor || new_box_tile == Tile::Goal)
-                            && (player_tile == Tile::Floor || player_tile == Tile::Goal)
-                            && distances[new_box_pos.1 as usize][new_box_pos.0 as usize] == u16::MAX
-                        {
-                            distances[new_box_pos.1 as usize][new_box_pos.0 as usize] = dist + 1;
-                            queue.push_back(new_box_pos);
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    /// BFS using pushes to compute distances from a box start position
-    fn bfs_pushes(game: &Game, start_pos: Position, distances: &mut [[u16; MAX_SIZE]; MAX_SIZE]) {
-        let mut queue = VecDeque::new();
-        queue.push_back(start_pos);
-        distances[start_pos.1 as usize][start_pos.0 as usize] = 0;
-
-        while let Some(box_pos) = queue.pop_front() {
-            let dist = distances[box_pos.1 as usize][box_pos.0 as usize];
-
-            for direction in ALL_DIRECTIONS {
-                if let Some(new_box_pos) = game.move_position(box_pos, direction) {
-                    if let Some(player_pos) = game.move_position(box_pos, direction.reverse()) {
-                        let new_box_tile = game.get_tile(new_box_pos);
-                        let player_tile = game.get_tile(player_pos);
-
-                        if (new_box_tile == Tile::Floor || new_box_tile == Tile::Goal)
-                            && (player_tile == Tile::Floor || player_tile == Tile::Goal)
-                            && distances[new_box_pos.1 as usize][new_box_pos.0 as usize] == u16::MAX
-                        {
-                            distances[new_box_pos.1 as usize][new_box_pos.0 as usize] = dist + 1;
-                            queue.push_back(new_box_pos);
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    fn compute_distance(
-        game: &Game,
-        distances: &[[[u16; MAX_SIZE]; MAX_SIZE]; MAX_BOXES],
-    ) -> Option<u16> {
+impl Heuristic for SimpleHeuristic {
+    fn compute(&self, game: &Game) -> Option<u16> {
         // Compute two distances:
         //   box_to_dst_total: total distance from each box to its nearest destination.
         //   dst_to_box_total: total distance from each destination to its nearest box.
@@ -134,10 +55,10 @@ impl SimpleHeuristic {
         for pos in game.box_positions().iter() {
             let mut box_to_dst = u16::MAX;
 
-            for dst_idx in 0..box_count {
-                let distance = distances[dst_idx][pos.1 as usize][pos.0 as usize];
+            for (dst_idx, dst_to_box) in dst_to_box.iter_mut().enumerate().take(box_count) {
+                let distance = self.distances[dst_idx][pos.1 as usize][pos.0 as usize];
                 box_to_dst = std::cmp::min(box_to_dst, distance);
-                dst_to_box[dst_idx] = std::cmp::min(dst_to_box[dst_idx], distance);
+                *dst_to_box = std::cmp::min(*dst_to_box, distance);
             }
 
             if box_to_dst == u16::MAX {
@@ -160,9 +81,81 @@ impl SimpleHeuristic {
     }
 }
 
-impl Heuristic for SimpleHeuristic {
-    fn compute(&self, game: &Game) -> Option<u16> {
-        Self::compute_distance(game, &self.distances)
+/// Compute push distances from each goal to all positions using BFS with pulls
+fn compute_distances_from_goals(game: &Game) -> [[[u16; MAX_SIZE]; MAX_SIZE]; MAX_BOXES] {
+    let mut distances = [[[u16::MAX; MAX_SIZE]; MAX_SIZE]; MAX_BOXES];
+
+    for (goal_idx, &goal_pos) in game.goal_positions().iter().enumerate() {
+        bfs_pulls(game, goal_pos, &mut distances[goal_idx]);
+    }
+
+    distances
+}
+
+/// Compute pull distances from each start position to all positions using BFS with pushes
+fn compute_distances_from_starts(game: &Game) -> [[[u16; MAX_SIZE]; MAX_SIZE]; MAX_BOXES] {
+    let mut distances = [[[u16::MAX; MAX_SIZE]; MAX_SIZE]; MAX_BOXES];
+
+    for (box_idx, &start_pos) in game.start_positions().iter().enumerate() {
+        bfs_pushes(game, start_pos, &mut distances[box_idx]);
+    }
+
+    distances
+}
+
+/// BFS using pulls to compute distances from a goal position
+fn bfs_pulls(game: &Game, goal_pos: Position, distances: &mut [[u16; MAX_SIZE]; MAX_SIZE]) {
+    let mut queue = VecDeque::new();
+    queue.push_back(goal_pos);
+    distances[goal_pos.1 as usize][goal_pos.0 as usize] = 0;
+
+    while let Some(box_pos) = queue.pop_front() {
+        let dist = distances[box_pos.1 as usize][box_pos.0 as usize];
+
+        for direction in ALL_DIRECTIONS {
+            if let Some(new_box_pos) = game.move_position(box_pos, direction.reverse()) {
+                if let Some(player_pos) = game.move_position(new_box_pos, direction.reverse()) {
+                    let new_box_tile = game.get_tile(new_box_pos);
+                    let player_tile = game.get_tile(player_pos);
+
+                    if (new_box_tile == Tile::Floor || new_box_tile == Tile::Goal)
+                        && (player_tile == Tile::Floor || player_tile == Tile::Goal)
+                        && distances[new_box_pos.1 as usize][new_box_pos.0 as usize] == u16::MAX
+                    {
+                        distances[new_box_pos.1 as usize][new_box_pos.0 as usize] = dist + 1;
+                        queue.push_back(new_box_pos);
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// BFS using pushes to compute distances from a box start position
+fn bfs_pushes(game: &Game, start_pos: Position, distances: &mut [[u16; MAX_SIZE]; MAX_SIZE]) {
+    let mut queue = VecDeque::new();
+    queue.push_back(start_pos);
+    distances[start_pos.1 as usize][start_pos.0 as usize] = 0;
+
+    while let Some(box_pos) = queue.pop_front() {
+        let dist = distances[box_pos.1 as usize][box_pos.0 as usize];
+
+        for direction in ALL_DIRECTIONS {
+            if let Some(new_box_pos) = game.move_position(box_pos, direction) {
+                if let Some(player_pos) = game.move_position(box_pos, direction.reverse()) {
+                    let new_box_tile = game.get_tile(new_box_pos);
+                    let player_tile = game.get_tile(player_pos);
+
+                    if (new_box_tile == Tile::Floor || new_box_tile == Tile::Goal)
+                        && (player_tile == Tile::Floor || player_tile == Tile::Goal)
+                        && distances[new_box_pos.1 as usize][new_box_pos.0 as usize] == u16::MAX
+                    {
+                        distances[new_box_pos.1 as usize][new_box_pos.0 as usize] = dist + 1;
+                        queue.push_back(new_box_pos);
+                    }
+                }
+            }
+        }
     }
 }
 
