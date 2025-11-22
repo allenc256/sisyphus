@@ -22,21 +22,21 @@ impl Heuristic for NullHeuristic {
     }
 }
 
-/// A heuristic based on greedy matching of boxes to goals using precomputed push/pull distances.
-pub struct GreedyHeuristic {
+/// A heuristic based on simple matching of boxes to goals using precomputed push/pull distances.
+pub struct SimpleHeuristic {
     /// distances[idx][y][x] = minimum pushes/pulls to get a box from (x, y) to destination idx
     distances: Box<[[[u16; MAX_SIZE]; MAX_SIZE]; MAX_BOXES]>,
 }
 
-impl GreedyHeuristic {
+impl SimpleHeuristic {
     pub fn new_forward(game: &Game) -> Self {
         let distances = Box::new(Self::compute_distances_from_goals(game));
-        GreedyHeuristic { distances }
+        SimpleHeuristic { distances }
     }
 
     pub fn new_reverse(game: &Game) -> Self {
         let distances = Box::new(Self::compute_distances_from_starts(game));
-        GreedyHeuristic { distances }
+        SimpleHeuristic { distances }
     }
 
     /// Compute push distances from each goal to all positions using BFS with pulls
@@ -117,14 +117,14 @@ impl GreedyHeuristic {
         }
     }
 
-    fn greedy_distance(
+    fn compute_distance(
         game: &Game,
         distances: &[[[u16; MAX_SIZE]; MAX_SIZE]; MAX_BOXES],
     ) -> Option<u16> {
         // Compute two distances:
         //   box_to_dst_total: total distance from each box to its nearest destination.
         //   dst_to_box_total: total distance from each destination to its nearest box.
-        // The greedy distance is the maximum between the two.
+        // The simple distance is the maximum between the two.
         // If either distance is u16::MAX, then the game is unsolvable.
 
         let mut box_to_dst_total = 0u16;
@@ -160,9 +160,9 @@ impl GreedyHeuristic {
     }
 }
 
-impl Heuristic for GreedyHeuristic {
+impl Heuristic for SimpleHeuristic {
     fn compute(&self, game: &Game) -> Option<u16> {
-        Self::greedy_distance(game, &self.distances)
+        Self::compute_distance(game, &self.distances)
     }
 }
 
@@ -171,30 +171,30 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_greedy_heuristic_solved() {
+    fn test_simple_heuristic_solved() {
         let input = "####\n\
                      #@*#\n\
                      ####";
         let game = Game::from_text(input).unwrap();
-        let heuristic = GreedyHeuristic::new_forward(&game);
+        let heuristic = SimpleHeuristic::new_forward(&game);
 
         assert_eq!(heuristic.compute(&game), Some(0));
     }
 
     #[test]
-    fn test_greedy_heuristic_one_move() {
+    fn test_simple_heuristic_one_move() {
         let input = "####\n\
                      #@$.#\n\
                      ####";
         let game = Game::from_text(input).unwrap();
-        let heuristic = GreedyHeuristic::new_forward(&game);
+        let heuristic = SimpleHeuristic::new_forward(&game);
 
         // Box at (2,1), goal at (3,1), push distance = 1
         assert_eq!(heuristic.compute(&game), Some(1));
     }
 
     #[test]
-    fn test_greedy_heuristic_multiple_boxes() {
+    fn test_simple_heuristic_multiple_boxes() {
         let input = "######\n\
                      #    #\n\
                      # $$ #\n\
@@ -202,10 +202,10 @@ mod tests {
                      #  @ #\n\
                      ######";
         let game = Game::from_text(input).unwrap();
-        let heuristic = GreedyHeuristic::new_forward(&game);
+        let heuristic = SimpleHeuristic::new_forward(&game);
 
         // Two boxes at (2,2) and (3,2), two goals at (2,3) and (3,3)
-        // Greedy matching should pair them optimally: each box is 1 away from a goal
+        // Simple matching should pair them optimally: each box is 1 away from a goal
         assert_eq!(heuristic.compute(&game), Some(2));
     }
 }

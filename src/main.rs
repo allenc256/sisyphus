@@ -8,7 +8,7 @@ mod zobrist;
 
 use clap::{Parser, ValueEnum};
 use game::Game;
-use heuristic::{GreedyHeuristic, Heuristic, NullHeuristic};
+use heuristic::{Heuristic, NullHeuristic, SimpleHeuristic};
 use levels::Levels;
 use solver::{SearchType, SolveResult, Solver};
 use std::time::Instant;
@@ -20,7 +20,7 @@ use crate::{
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
 enum HeuristicType {
-    Greedy,
+    Simple,
     Null,
 }
 
@@ -181,11 +181,11 @@ fn solve_level_helper<H: Heuristic>(
 
 fn solve_level(game: &Game, opts: SolveOpts, heuristic_type: HeuristicType) -> LevelStats {
     match heuristic_type {
-        HeuristicType::Greedy => solve_level_helper(
+        HeuristicType::Simple => solve_level_helper(
             game,
             opts,
-            GreedyHeuristic::new_forward(game),
-            GreedyHeuristic::new_reverse(game),
+            SimpleHeuristic::new_forward(game),
+            SimpleHeuristic::new_reverse(game),
         ),
         HeuristicType::Null => {
             solve_level_helper(game, opts, NullHeuristic::new(), NullHeuristic::new())
@@ -218,7 +218,7 @@ struct Args {
     max_nodes_explored: usize,
 
     /// Heuristic to use for solving
-    #[arg(short = 'H', long, value_enum, default_value = "greedy")]
+    #[arg(short = 'H', long, value_enum, default_value = "simple")]
     heuristic: HeuristicType,
 
     /// Search type
