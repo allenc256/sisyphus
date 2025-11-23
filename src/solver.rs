@@ -44,11 +44,11 @@ struct Searcher<H: Heuristic, T: Tracer, S: SearchHelper> {
     table: HashMap<u64, TableEntry>, // Transposition table mapping state hash to entry
     zobrist: Rc<Zobrist>,
     heuristic: H,
+    heuristic_cache: HashMap<u64, u16>, // Cache of heuristic values (u16::MAX = unsolvable)
     initial_game: Game,
     initial_player_positions: Vec<Position>,
     initial_boxes_hash: u64,
     freeze_deadlocks: bool,
-    // frozen_counts: HashMap<u64, usize>,
     tracer: Option<Rc<T>>,
     helper: S,
 }
@@ -127,11 +127,11 @@ impl<H: Heuristic, T: Tracer, S: SearchHelper> Searcher<H, T, S> {
             table: HashMap::new(),
             zobrist,
             heuristic,
+            heuristic_cache: HashMap::new(),
             initial_game,
             initial_player_positions,
             initial_boxes_hash,
             freeze_deadlocks,
-            // frozen_counts: HashMap::new(),
             tracer,
             helper,
         };
@@ -226,12 +226,19 @@ impl<H: Heuristic, T: Tracer, S: SearchHelper> Searcher<H, T, S> {
             return SearchResult::Cutoff;
         }
 
-        // Compute heuristic and f-cost
+        // Compute heuristic and f-cost (with caching)
         let mut f_cost = g_cost;
-        match self.heuristic.compute(game) {
-            Some(h_cost) => f_cost += h_cost as usize,
-            None => return SearchResult::Impossible,
+        let h_cost = if let Some(&cached) = self.heuristic_cache.get(&boxes_hash) {
+            cached
+        } else {
+            let computed = self.heuristic.compute(game).unwrap_or(u16::MAX);
+            self.heuristic_cache.insert(boxes_hash, computed);
+            computed
+        };
+        if h_cost == u16::MAX {
+            return SearchResult::Impossible;
         }
+        f_cost += h_cost as usize;
 
         // If f-cost exceeds threshold, stop searching this branch
         if f_cost > threshold {
@@ -698,6 +705,13 @@ mod tests {
     }
 
     fn new_solver(game: Game) -> Solver<SimpleHeuristic, NullTracer> {
-        Solver::new(5000000, SearchType::Forward, game, true, Pruning::PiCorrals, None)
+        Solver::new(
+            5000000,
+            SearchType::Forward,
+            game,
+            true,
+            Pruning::PiCorrals,
+            None,
+        )
     }
 }
