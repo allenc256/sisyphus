@@ -9,19 +9,31 @@ use std::collections::VecDeque;
 /// Trait for computing heuristics that estimate the number of moves (pushes/pulls) needed.
 /// Returns None if the position is impossible to solve, or Some(cost) with the estimated cost.
 pub trait Heuristic {
+    /// Create a push-oriented heuristic for forward search.
+    fn new_push(game: &Game) -> Self
+    where
+        Self: Sized;
+
+    /// Create a pull-oriented heuristic for reverse search.
+    fn new_pull(game: &Game) -> Self
+    where
+        Self: Sized;
+
     /// Compute estimated number of moves (pushes/pulls).
     fn compute(&self, game: &Game) -> Option<u16>;
 }
 
 pub struct NullHeuristic;
 
-impl NullHeuristic {
-    pub fn new() -> Self {
+impl Heuristic for NullHeuristic {
+    fn new_push(_game: &Game) -> Self {
         NullHeuristic
     }
-}
 
-impl Heuristic for NullHeuristic {
+    fn new_pull(_game: &Game) -> Self {
+        NullHeuristic
+    }
+
     fn compute(&self, _game: &Game) -> Option<u16> {
         Some(0)
     }
@@ -33,19 +45,17 @@ pub struct SimpleHeuristic {
     distances: Box<[[[u16; MAX_SIZE]; MAX_SIZE]; MAX_BOXES]>,
 }
 
-impl SimpleHeuristic {
-    pub fn new_forward(game: &Game) -> Self {
-        let distances = Box::new(compute_distances_from_goals(game));
-        SimpleHeuristic { distances }
-    }
-
-    pub fn new_reverse(game: &Game) -> Self {
-        let distances = Box::new(compute_distances_from_starts(game));
-        SimpleHeuristic { distances }
-    }
-}
-
 impl Heuristic for SimpleHeuristic {
+    fn new_push(game: &Game) -> Self {
+        let distances = Box::new(compute_push_distances(game));
+        SimpleHeuristic { distances }
+    }
+
+    fn new_pull(game: &Game) -> Self {
+        let distances = Box::new(compute_pull_distances(game));
+        SimpleHeuristic { distances }
+    }
+
     fn compute(&self, game: &Game) -> Option<u16> {
         // Compute two distances:
         //   box_to_dst_total: total distance from each box to its nearest destination.
@@ -94,19 +104,17 @@ pub struct GreedyHeuristic {
     distances: Box<[[[u16; MAX_SIZE]; MAX_SIZE]; MAX_BOXES]>,
 }
 
-impl GreedyHeuristic {
-    pub fn new_forward(game: &Game) -> Self {
-        let distances = Box::new(compute_distances_from_goals(game));
-        GreedyHeuristic { distances }
-    }
-
-    pub fn new_reverse(game: &Game) -> Self {
-        let distances = Box::new(compute_distances_from_starts(game));
-        GreedyHeuristic { distances }
-    }
-}
-
 impl Heuristic for GreedyHeuristic {
+    fn new_push(game: &Game) -> Self {
+        let distances = Box::new(compute_push_distances(game));
+        GreedyHeuristic { distances }
+    }
+
+    fn new_pull(game: &Game) -> Self {
+        let distances = Box::new(compute_pull_distances(game));
+        GreedyHeuristic { distances }
+    }
+
     fn compute(&self, game: &Game) -> Option<u16> {
         const M: usize = MAX_BOXES * MAX_BOXES;
         const N: usize = MAX_SIZE * MAX_SIZE;
@@ -179,7 +187,7 @@ impl Heuristic for GreedyHeuristic {
 }
 
 /// Compute push distances from each goal to all positions using BFS with pulls
-fn compute_distances_from_goals(game: &Game) -> [[[u16; MAX_SIZE]; MAX_SIZE]; MAX_BOXES] {
+fn compute_push_distances(game: &Game) -> [[[u16; MAX_SIZE]; MAX_SIZE]; MAX_BOXES] {
     let mut distances = [[[u16::MAX; MAX_SIZE]; MAX_SIZE]; MAX_BOXES];
 
     for (goal_idx, &goal_pos) in game.goal_positions().iter().enumerate() {
@@ -189,12 +197,12 @@ fn compute_distances_from_goals(game: &Game) -> [[[u16; MAX_SIZE]; MAX_SIZE]; MA
     distances
 }
 
-/// Compute pull distances from each start position to all positions using BFS with pushes
-fn compute_distances_from_starts(game: &Game) -> [[[u16; MAX_SIZE]; MAX_SIZE]; MAX_BOXES] {
+/// Compute pull distances from each goal to all positions using BFS with pushes
+fn compute_pull_distances(game: &Game) -> [[[u16; MAX_SIZE]; MAX_SIZE]; MAX_BOXES] {
     let mut distances = [[[u16::MAX; MAX_SIZE]; MAX_SIZE]; MAX_BOXES];
 
-    for (box_idx, &start_pos) in game.start_positions().iter().enumerate() {
-        bfs_pushes(game, start_pos, &mut distances[box_idx]);
+    for (goal_idx, &goal_pos) in game.goal_positions().iter().enumerate() {
+        bfs_pushes(game, goal_pos, &mut distances[goal_idx]);
     }
 
     distances
@@ -332,7 +340,7 @@ mod tests {
                      #@*#\n\
                      ####";
         let game = Game::from_text(input).unwrap();
-        let heuristic = SimpleHeuristic::new_forward(&game);
+        let heuristic = SimpleHeuristic::new_push(&game);
 
         assert_eq!(heuristic.compute(&game), Some(0));
     }
@@ -343,7 +351,7 @@ mod tests {
                      #@$.#\n\
                      ####";
         let game = Game::from_text(input).unwrap();
-        let heuristic = SimpleHeuristic::new_forward(&game);
+        let heuristic = SimpleHeuristic::new_push(&game);
 
         // Box at (2,1), goal at (3,1), push distance = 1
         assert_eq!(heuristic.compute(&game), Some(1));
@@ -358,7 +366,7 @@ mod tests {
                      #  @ #\n\
                      ######";
         let game = Game::from_text(input).unwrap();
-        let heuristic = SimpleHeuristic::new_forward(&game);
+        let heuristic = SimpleHeuristic::new_push(&game);
 
         // Two boxes at (2,2) and (3,2), two goals at (2,3) and (3,3)
         // Simple matching should pair them optimally: each box is 1 away from a goal

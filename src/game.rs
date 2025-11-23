@@ -79,6 +79,13 @@ impl fmt::Display for Direction {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Pruning {
+    None,
+    DeadSquares,
+    PiCorrals,
+}
+
 pub trait Move: fmt::Display {
     fn new(box_index: Index, direction: Direction) -> Self;
     fn box_index(&self) -> Index;
@@ -326,7 +333,6 @@ pub struct Game {
     width: u8,
     height: u8,
     boxes: Boxes,
-    start_positions: ArrayVec<Position, MAX_BOXES>,
     goal_positions: ArrayVec<Position, MAX_BOXES>,
     dead_squares: Bitboard,
 }
@@ -368,7 +374,6 @@ impl Game {
         let mut tiles = [[Tile::Floor; MAX_SIZE]; MAX_SIZE];
         let mut player = None;
         let mut boxes = Boxes::new();
-        let mut start_positions = ArrayVec::new();
         let mut goal_positions = ArrayVec::new();
         let mut unsolved_boxes = Bitvector::new();
 
@@ -385,12 +390,10 @@ impl Game {
                         tiles[y][x] = Tile::Floor;
                         let box_idx = boxes.add(Position(x as u8, y as u8));
                         unsolved_boxes.add(box_idx);
-                        start_positions.push(Position(x as u8, y as u8));
                     }
                     '*' => {
                         tiles[y][x] = Tile::Goal;
                         goal_positions.push(Position(x as u8, y as u8));
-                        start_positions.push(Position(x as u8, y as u8));
                         boxes.add(Position(x as u8, y as u8));
                     }
                     '@' => {
@@ -438,7 +441,6 @@ impl Game {
             width: width as u8,
             height: height as u8,
             boxes,
-            start_positions,
             goal_positions,
             dead_squares: Bitboard::new(),
         };
@@ -504,10 +506,6 @@ impl Game {
 
     pub fn box_positions(&self) -> &[Position] {
         &self.boxes.positions
-    }
-
-    pub fn start_positions(&self) -> &[Position] {
-        &self.start_positions
     }
 
     pub fn goal_positions(&self) -> &[Position] {
@@ -620,20 +618,37 @@ impl Game {
         self.unsolved_boxes.is_empty()
     }
 
-    /// Make a game state in the solved position where all boxes are on goals.
+    /// Create a new game state with boxes and goals swapped.
+    /// Boxes are placed at goal positions, and goals become where boxes originally were.
     /// This is useful for backward search.
-    pub fn make_goal_state(&self) -> Self {
+    pub fn swap_boxes_and_goals(&self) -> Self {
         // Build new boxes with positions at goal locations
         let mut boxes = Boxes::new();
+        let mut unsolved_boxes = Bitvector::new();
+        let new_goal_positions = self.boxes.positions.clone();
+
         for &goal_pos in &self.goal_positions {
-            boxes.add(goal_pos);
+            let box_idx = boxes.add(goal_pos);
+            // Box is unsolved if it's not on one of the new goals (original box positions)
+            if !new_goal_positions.contains(&goal_pos) {
+                unsolved_boxes.add(box_idx);
+            }
+        }
+
+        // Update tiles: old goals become floor, old box positions become goals
+        let mut tiles = self.tiles;
+        for &old_goal in &self.goal_positions {
+            tiles[old_goal.1 as usize][old_goal.0 as usize] = Tile::Floor;
+        }
+        for &new_goal in &new_goal_positions {
+            tiles[new_goal.1 as usize][new_goal.0 as usize] = Tile::Goal;
         }
 
         let mut game = Game {
+            tiles,
             boxes,
-            start_positions: self.start_positions.clone(),
-            goal_positions: self.goal_positions.clone(),
-            unsolved_boxes: Bitvector::new(),
+            goal_positions: new_goal_positions,
+            unsolved_boxes,
             dead_squares: Bitboard::new(),
             ..self.clone()
         };
@@ -650,14 +665,52 @@ impl Game {
     /// Compute all possible box pushes from the current game state.
     /// Uses a single DFS from player position to find all reachable boxes.
     /// Returns the pushes and the canonicalized (lexicographically smallest) player position.
-    pub fn compute_pushes(&self) -> (Moves<Push>, Position) {
-        let mut visited = LazyBitboard::new();
-        let mut boxes = Bitvector::new();
-        self.compute_pushes_helper(&mut visited, &mut boxes)
+    pub fn compute_pushes(&self, pruning: Pruning) -> (Moves<Push>, Position) {
+        let mut player_reachable = LazyBitboard::new();
+        let mut player_reachable_boxes = Bitvector::new();
+        let dead_squares = pruning != Pruning::None;
+
+        let (mut pushes, canonical_pos) =
+            self.compute_pushes_helper(dead_squares, &mut player_reachable, &mut player_reachable_boxes);
+
+        if pruning == Pruning::PiCorrals {
+            let mut corrals_visited = LazyBitboard::new();
+            let mut min_cost = usize::MAX;
+
+            // Now walk through each push and examine the other side of the push for
+            // a PI corral. Note that we only need to consider corrals that are the
+            // other side of a valid player push (any corral NOT on the other side
+            // of a player push full the "P" condition of a PI-corral).
+            for push in pushes.iter() {
+                let box_pos = self.box_position(push.box_index);
+                let Some(new_pos) = self.move_position(box_pos, push.direction) else {
+                    panic!("Invalid push");
+                };
+                if !player_reachable.get(new_pos) && !corrals_visited.get(new_pos) {
+                    if let Some((corral_pushes, cost)) = self.compute_pi_corral_helper(
+                        new_pos,
+                        &player_reachable,
+                        player_reachable_boxes,
+                        &mut corrals_visited,
+                    ) {
+                        // If we've found a PI-corral, check if this is is the
+                        // lowest "cost" PI-corral we've found so far. If it is, set
+                        // the player pushes to this PI-corral's pushes.
+                        if cost < min_cost {
+                            pushes = corral_pushes;
+                            min_cost = cost;
+                        }
+                    }
+                }
+            }
+        }
+
+        (pushes, canonical_pos)
     }
 
     fn compute_pushes_helper(
         &self,
+        dead_squares: bool,
         visited: &mut LazyBitboard,
         boxes: &mut Bitvector,
     ) -> (Moves<Push>, Position) {
@@ -666,51 +719,12 @@ impl Game {
             boxes.add(box_idx);
             let box_pos = self.box_position(box_idx);
             if let Some(dest_pos) = self.move_position(box_pos, dir) {
-                if !self.is_blocked(dest_pos) && !self.is_dead_square(dest_pos) {
+                let dominated = dead_squares && self.is_dead_square(dest_pos);
+                if !self.is_blocked(dest_pos) && !dominated {
                     pushes.add(box_idx, dir);
                 }
             }
         });
-        (pushes, canonical_pos)
-    }
-
-    pub fn compute_pi_corral_pushes(&self) -> (Moves<Push>, Position) {
-        let mut player_reachable = LazyBitboard::new();
-        let mut player_reachable_boxes = Bitvector::new();
-        let mut corrals_visited = LazyBitboard::new();
-        let mut min_cost = usize::MAX;
-
-        // Start by computing pushes, reachable positions, and reachable boxes
-        let (mut pushes, canonical_pos) =
-            self.compute_pushes_helper(&mut player_reachable, &mut player_reachable_boxes);
-
-        // Now walk through each push and examine the other side of the push for
-        // a PI corral. Note that we only need to consider corrals that are the
-        // other side of a valid player push (any corral NOT on the other side
-        // of a player push full the "P" condition of a PI-corral).
-        for push in pushes.iter() {
-            let box_pos = self.box_position(push.box_index);
-            let Some(new_pos) = self.move_position(box_pos, push.direction) else {
-                panic!("Invalid push");
-            };
-            if !player_reachable.get(new_pos) && !corrals_visited.get(new_pos) {
-                if let Some((corral_pushes, cost)) = self.compute_pi_corral_helper(
-                    new_pos,
-                    &player_reachable,
-                    player_reachable_boxes,
-                    &mut corrals_visited,
-                ) {
-                    // If we've found a PI-corral, check if this is is the
-                    // lowest "cost" PI-corral we've found so far. If it is, set
-                    // the player pushes to this PI-corral's pushes.
-                    if cost < min_cost {
-                        pushes = corral_pushes;
-                        min_cost = cost;
-                    }
-                }
-            }
-        }
-
         (pushes, canonical_pos)
     }
 
@@ -1301,7 +1315,7 @@ mod tests {
 ####
 "#,
         );
-        let (pushes, canonical_pos) = game.compute_pushes();
+        let (pushes, canonical_pos) = game.compute_pushes(Pruning::DeadSquares);
         let mut actual = pushes.iter().collect::<Vec<_>>();
         let mut expected = vec![
             Push {
@@ -1583,7 +1597,7 @@ mod tests {
         let mut player_reachable_boxes: Bitvector = Bitvector::new();
         let mut corrals_visited = LazyBitboard::new();
 
-        game.compute_pushes_helper(&mut player_reachable, &mut player_reachable_boxes);
+        game.compute_pushes_helper(true, &mut player_reachable, &mut player_reachable_boxes);
 
         let result = game.compute_pi_corral_helper(
             Position(x, y),

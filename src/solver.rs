@@ -1,6 +1,6 @@
 use crate::bits::{Bitvector, Index};
 use crate::deadlocks::{compute_frozen_boxes, compute_new_frozen_boxes};
-use crate::game::{Direction, Game, Move, Moves, Position, Pull, Push};
+use crate::game::{Direction, Game, Move, Moves, Position, Pruning, Pull, Push};
 use crate::heuristic::Heuristic;
 use crate::zobrist::Zobrist;
 use std::collections::HashMap;
@@ -71,7 +71,7 @@ trait SearchHelper {
 }
 
 struct ForwardsSearchHelper {
-    pi_corrals: bool,
+    pruning: Pruning,
 }
 
 struct BackwardsSearchHelper;
@@ -397,11 +397,7 @@ impl SearchHelper for ForwardsSearchHelper {
     type Move = Push;
 
     fn compute_moves(&self, game: &Game) -> (Moves<Push>, Position) {
-        if self.pi_corrals {
-            game.compute_pi_corral_pushes()
-        } else {
-            game.compute_pushes()
-        }
+        game.compute_pushes(self.pruning)
     }
 
     fn compute_unmoves(&self, game: &Game) -> Moves<Push> {
@@ -434,7 +430,7 @@ impl SearchHelper for BackwardsSearchHelper {
     }
 
     fn compute_unmoves(&self, game: &Game) -> Moves<Pull> {
-        game.compute_pushes().0.to_pulls()
+        game.compute_pushes(Pruning::None).0.to_pulls()
     }
 
     fn apply_move(&self, game: &mut Game, pull: &Pull) {
@@ -456,22 +452,22 @@ impl SearchHelper for BackwardsSearchHelper {
 }
 
 impl<H: Heuristic, T: Tracer> Solver<H, T> {
-    #[allow(clippy::too_many_arguments)]
     pub fn new(
         max_nodes_explored: usize,
-        forward_heuristic: H,
-        reverse_heuristic: H,
         search_type: SearchType,
         game: Game,
         freeze_deadlocks: bool,
-        pi_corrals: bool,
+        pruning: Pruning,
         tracer: Option<T>,
     ) -> Self {
         let zobrist = Rc::new(Zobrist::new());
         let tracer = tracer.map(|t| Rc::new(t));
-        let goal_state = game.make_goal_state();
+        let goal_state = game.swap_boxes_and_goals();
         let forward_player_positions = vec![game.canonical_player_pos()];
         let reverse_player_positions = goal_state.all_possible_player_positions();
+
+        let forward_heuristic = H::new_push(&game);
+        let reverse_heuristic = H::new_pull(&goal_state);
 
         Solver {
             forward: Searcher::new(
@@ -482,7 +478,7 @@ impl<H: Heuristic, T: Tracer> Solver<H, T> {
                 forward_player_positions,
                 freeze_deadlocks,
                 tracer.clone(),
-                ForwardsSearchHelper { pi_corrals },
+                ForwardsSearchHelper { pruning },
             ),
             reverse: Searcher::new(
                 zobrist,
@@ -572,7 +568,7 @@ impl<H: Heuristic, T: Tracer> Solver<H, T> {
             });
 
             // Compute valid pushes at this state
-            let (valid_pushes, _canonical_pos) = test_game.compute_pushes();
+            let (valid_pushes, _canonical_pos) = test_game.compute_pushes(Pruning::None);
 
             // Verify that this push is among the valid pushes
             let push = Push::new(box_index, push_by_pos.direction);
@@ -702,15 +698,6 @@ mod tests {
     }
 
     fn new_solver(game: Game) -> Solver<SimpleHeuristic, NullTracer> {
-        Solver::new(
-            5000000,
-            SimpleHeuristic::new_forward(&game),
-            SimpleHeuristic::new_reverse(&game),
-            SearchType::Forward,
-            game,
-            true,
-            true,
-            None,
-        )
+        Solver::new(5000000, SearchType::Forward, game, true, Pruning::PiCorrals, None)
     }
 }

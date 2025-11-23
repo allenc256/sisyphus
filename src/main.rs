@@ -14,7 +14,7 @@ use solver::{SearchType, SolveResult, Solver};
 use std::time::Instant;
 
 use crate::{
-    game::{Move, Push},
+    game::{Move, Pruning, Push},
     heuristic::GreedyHeuristic,
     solver::Tracer,
 };
@@ -31,6 +31,23 @@ enum Direction {
     Forward,
     Reverse,
     Bidirectional,
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum PruningArg {
+    None,
+    DeadSquares,
+    PiCorrals,
+}
+
+impl From<PruningArg> for Pruning {
+    fn from(arg: PruningArg) -> Self {
+        match arg {
+            PruningArg::None => Pruning::None,
+            PruningArg::DeadSquares => Pruning::DeadSquares,
+            PruningArg::PiCorrals => Pruning::PiCorrals,
+        }
+    }
 }
 
 impl From<Direction> for SearchType {
@@ -116,30 +133,23 @@ struct SolveOpts {
     search_type: SearchType,
     print_solution: bool,
     freeze_deadlocks: bool,
-    pi_corrals: bool,
+    pruning: Pruning,
     trace_range: Option<(usize, usize)>,
 }
 
-fn solve_level_helper<H: Heuristic>(
-    game: &Game,
-    opts: SolveOpts,
-    forward_heuristic: H,
-    reverse_heuristic: H,
-) -> LevelStats {
+fn solve_level_helper<H: Heuristic>(game: &Game, opts: SolveOpts) -> LevelStats {
     let tracer: Option<VerboseTracer> = if let Some((trace_start, trace_end)) = opts.trace_range {
         Some(VerboseTracer::new(trace_start, trace_end))
     } else {
         None
     };
 
-    let mut solver = Solver::new(
+    let mut solver: Solver<H, VerboseTracer> = Solver::new(
         opts.max_nodes_explored,
-        forward_heuristic,
-        reverse_heuristic,
         opts.search_type,
         game.clone(),
         opts.freeze_deadlocks,
-        opts.pi_corrals,
+        opts.pruning,
         tracer,
     );
     let start = Instant::now();
@@ -183,21 +193,9 @@ fn solve_level_helper<H: Heuristic>(
 
 fn solve_level(game: &Game, opts: SolveOpts, heuristic_type: HeuristicType) -> LevelStats {
     match heuristic_type {
-        HeuristicType::Simple => solve_level_helper(
-            game,
-            opts,
-            SimpleHeuristic::new_forward(game),
-            SimpleHeuristic::new_reverse(game),
-        ),
-        HeuristicType::Greedy => solve_level_helper(
-            game,
-            opts,
-            GreedyHeuristic::new_forward(game),
-            GreedyHeuristic::new_reverse(game),
-        ),
-        HeuristicType::Null => {
-            solve_level_helper(game, opts, NullHeuristic::new(), NullHeuristic::new())
-        }
+        HeuristicType::Simple => solve_level_helper::<SimpleHeuristic>(game, opts),
+        HeuristicType::Greedy => solve_level_helper::<GreedyHeuristic>(game, opts),
+        HeuristicType::Null => solve_level_helper::<NullHeuristic>(game, opts),
     }
 }
 
@@ -237,9 +235,9 @@ struct Args {
     #[arg(long, default_value = "false")]
     no_freeze_deadlocks: bool,
 
-    /// Disable PI-corral pruning
-    #[arg(long, default_value = "false")]
-    no_pi_corrals: bool,
+    /// Pruning strategy (none, dead-squares, pi-corrals)
+    #[arg(long, value_enum, default_value = "pi-corrals")]
+    pruning: PruningArg,
 
     /// Range of move numbers to trace (start, end)
     #[arg(long, num_args = 2)]
@@ -312,7 +310,7 @@ fn main() {
             search_type: args.direction.into(),
             print_solution: args.print_solution,
             freeze_deadlocks: !args.no_freeze_deadlocks,
-            pi_corrals: !args.no_pi_corrals,
+            pruning: args.pruning.into(),
             trace_range,
         };
         let stats = solve_level(game, opts, args.heuristic);
