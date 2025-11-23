@@ -6,7 +6,6 @@ use rand_chacha::ChaCha8Rng;
 pub struct Zobrist {
     box_hashes: [[u64; MAX_SIZE]; MAX_SIZE],
     player_hashes: [[u64; MAX_SIZE]; MAX_SIZE],
-    player_unknown_hash: u64,
 }
 
 impl Zobrist {
@@ -28,12 +27,9 @@ impl Zobrist {
             }
         }
 
-        let player_unknown_hash = rng.next_u64();
-
         Zobrist {
             box_hashes,
             player_hashes,
-            player_unknown_hash,
         }
     }
 
@@ -43,11 +39,8 @@ impl Zobrist {
     }
 
     /// Get hash value for player position
-    pub fn player_hash(&self, pos: Option<Position>) -> u64 {
-        match pos {
-            Some(Position(x, y)) => self.player_hashes[y as usize][x as usize],
-            None => self.player_unknown_hash,
-        }
+    pub fn player_hash(&self, pos: Position) -> u64 {
+        self.player_hashes[pos.1 as usize][pos.0 as usize]
     }
 
     /// Compute hash for all boxes in a game state
