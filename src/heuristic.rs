@@ -6,8 +6,21 @@ use crate::{
 };
 use std::collections::VecDeque;
 
+/// Estimated cost returned by heuristic computation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Cost(u16);
+
+impl Cost {
+    pub const UNSOLVABLE: Cost = Cost(u16::MAX);
+}
+
+impl From<Cost> for usize {
+    fn from(cost: Cost) -> usize {
+        cost.0 as usize
+    }
+}
+
 /// Trait for computing heuristics that estimate the number of moves (pushes/pulls) needed.
-/// Returns None if the position is impossible to solve, or Some(cost) with the estimated cost.
 pub trait Heuristic {
     /// Create a push-oriented heuristic for forward search.
     fn new_push(game: &Game) -> Self
@@ -20,7 +33,8 @@ pub trait Heuristic {
         Self: Sized;
 
     /// Compute estimated number of moves (pushes/pulls).
-    fn compute(&self, game: &Game) -> Option<u16>;
+    /// Returns UNSOLVABLE if the position is impossible to solve.
+    fn compute(&self, game: &Game) -> Cost;
 }
 
 pub struct NullHeuristic;
@@ -34,8 +48,8 @@ impl Heuristic for NullHeuristic {
         NullHeuristic
     }
 
-    fn compute(&self, _game: &Game) -> Option<u16> {
-        Some(0)
+    fn compute(&self, _game: &Game) -> Cost {
+        Cost(0)
     }
 }
 
@@ -56,7 +70,7 @@ impl Heuristic for SimpleHeuristic {
         SimpleHeuristic { distances }
     }
 
-    fn compute(&self, game: &Game) -> Option<u16> {
+    fn compute(&self, game: &Game) -> Cost {
         // Compute two distances:
         //   box_to_dst_total: total distance from each box to its nearest destination.
         //   dst_to_box_total: total distance from each destination to its nearest box.
@@ -77,7 +91,7 @@ impl Heuristic for SimpleHeuristic {
             }
 
             if box_to_dst == u16::MAX {
-                return None;
+                return Cost::UNSOLVABLE;
             }
 
             box_to_dst_total += box_to_dst;
@@ -86,13 +100,13 @@ impl Heuristic for SimpleHeuristic {
         let mut dst_to_box_total = 0;
         for &dist in dst_to_box.iter().take(box_count) {
             if dist == u16::MAX {
-                return None;
+                return Cost::UNSOLVABLE;
             } else {
                 dst_to_box_total += dist;
             }
         }
 
-        Some(std::cmp::max(dst_to_box_total, box_to_dst_total))
+        Cost(std::cmp::max(dst_to_box_total, box_to_dst_total))
     }
 }
 
@@ -115,7 +129,7 @@ impl Heuristic for GreedyHeuristic {
         GreedyHeuristic { distances }
     }
 
-    fn compute(&self, game: &Game) -> Option<u16> {
+    fn compute(&self, game: &Game) -> Cost {
         const M: usize = MAX_BOXES * MAX_BOXES;
         const N: usize = MAX_SIZE * MAX_SIZE;
         let box_count = game.box_count();
@@ -158,7 +172,7 @@ impl Heuristic for GreedyHeuristic {
                 .min()
                 .unwrap();
             if min_distance == u16::MAX {
-                return None;
+                return Cost::UNSOLVABLE;
             }
             unmatched_box_to_dst += min_distance;
         }
@@ -173,7 +187,7 @@ impl Heuristic for GreedyHeuristic {
                 .min()
                 .unwrap();
             if min_distance == u16::MAX {
-                return None;
+                return Cost::UNSOLVABLE;
             }
             unmatched_dst_to_box += min_distance;
         }
@@ -182,7 +196,7 @@ impl Heuristic for GreedyHeuristic {
         // bound is higher)
         total_distance += std::cmp::max(unmatched_box_to_dst, unmatched_dst_to_box);
 
-        Some(total_distance)
+        Cost(total_distance)
     }
 }
 
@@ -342,7 +356,7 @@ mod tests {
         let game = Game::from_text(input).unwrap();
         let heuristic = SimpleHeuristic::new_push(&game);
 
-        assert_eq!(heuristic.compute(&game), Some(0));
+        assert_eq!(heuristic.compute(&game), Cost(0));
     }
 
     #[test]
@@ -354,7 +368,7 @@ mod tests {
         let heuristic = SimpleHeuristic::new_push(&game);
 
         // Box at (2,1), goal at (3,1), push distance = 1
-        assert_eq!(heuristic.compute(&game), Some(1));
+        assert_eq!(heuristic.compute(&game), Cost(1));
     }
 
     #[test]
@@ -370,7 +384,7 @@ mod tests {
 
         // Two boxes at (2,2) and (3,2), two goals at (2,3) and (3,3)
         // Simple matching should pair them optimally: each box is 1 away from a goal
-        assert_eq!(heuristic.compute(&game), Some(2));
+        assert_eq!(heuristic.compute(&game), Cost(2));
     }
 
     #[test]

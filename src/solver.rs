@@ -1,7 +1,7 @@
 use crate::bits::{Bitvector, Index};
 use crate::deadlocks::{compute_frozen_boxes, compute_new_frozen_boxes};
 use crate::game::{Direction, Game, Move, Moves, Position, Pruning, Pull, Push};
-use crate::heuristic::Heuristic;
+use crate::heuristic::{Cost, Heuristic};
 use crate::zobrist::Zobrist;
 use std::collections::HashMap;
 use std::rc::Rc;
@@ -44,7 +44,7 @@ struct Searcher<H: Heuristic, T: Tracer, S: SearchHelper> {
     table: HashMap<u64, TableEntry>, // Transposition table mapping state hash to entry
     zobrist: Rc<Zobrist>,
     heuristic: H,
-    heuristic_cache: HashMap<u64, u16>, // Cache of heuristic values (u16::MAX = unsolvable)
+    heuristic_cache: HashMap<u64, Cost>,
     initial_game: Game,
     initial_player_positions: Vec<Position>,
     initial_boxes_hash: u64,
@@ -231,14 +231,14 @@ impl<H: Heuristic, T: Tracer, S: SearchHelper> Searcher<H, T, S> {
         let h_cost = if let Some(&cached) = self.heuristic_cache.get(&boxes_hash) {
             cached
         } else {
-            let computed = self.heuristic.compute(game).unwrap_or(u16::MAX);
+            let computed = self.heuristic.compute(game);
             self.heuristic_cache.insert(boxes_hash, computed);
             computed
         };
-        if h_cost == u16::MAX {
+        if h_cost == Cost::UNSOLVABLE {
             return SearchResult::Impossible;
         }
-        f_cost += h_cost as usize;
+        f_cost += usize::from(h_cost);
 
         // If f-cost exceeds threshold, stop searching this branch
         if f_cost > threshold {
