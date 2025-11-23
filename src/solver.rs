@@ -45,7 +45,7 @@ struct Searcher<H: Heuristic, T: Tracer, S: SearchHelper> {
     zobrist: Rc<Zobrist>,
     heuristic: H,
     initial_game: Game,
-    initial_hash: u64,
+    initial_player_positions: Vec<Position>,
     initial_boxes_hash: u64,
     freeze_deadlocks: bool,
     // frozen_counts: HashMap<u64, usize>,
@@ -58,7 +58,7 @@ struct Searcher<H: Heuristic, T: Tracer, S: SearchHelper> {
 trait SearchHelper {
     type Move: Move;
 
-    fn compute_moves(&self, game: &Game) -> (Moves<Self::Move>, Option<Position>);
+    fn compute_moves(&self, game: &Game) -> (Moves<Self::Move>, Position);
     fn compute_unmoves(&self, game: &Game) -> Moves<Self::Move>;
     fn apply_move(&self, game: &mut Game, move_: &Self::Move);
     fn unapply_move(&self, game: &mut Game, move_: &Self::Move);
@@ -109,16 +109,17 @@ struct PushByPos {
 }
 
 impl<H: Heuristic, T: Tracer, S: SearchHelper> Searcher<H, T, S> {
+    #[allow(clippy::too_many_arguments)]
     fn new(
         zobrist: Rc<Zobrist>,
         max_nodes_explored: usize,
         heuristic: H,
         initial_game: Game,
+        initial_player_positions: Vec<Position>,
         freeze_deadlocks: bool,
         tracer: Option<Rc<T>>,
         helper: S,
     ) -> Self {
-        let initial_hash = zobrist.compute_hash(&initial_game);
         let initial_boxes_hash = zobrist.compute_boxes_hash(&initial_game);
         let mut searcher = Searcher {
             nodes_explored: 0,
@@ -127,7 +128,7 @@ impl<H: Heuristic, T: Tracer, S: SearchHelper> Searcher<H, T, S> {
             zobrist,
             heuristic,
             initial_game,
-            initial_hash,
+            initial_player_positions,
             initial_boxes_hash,
             freeze_deadlocks,
             // frozen_counts: HashMap::new(),
@@ -148,12 +149,21 @@ impl<H: Heuristic, T: Tracer, S: SearchHelper> Searcher<H, T, S> {
     where
         F: Fn(u64) -> bool,
     {
-        let mut game = self.initial_game.clone();
         self.reset();
 
-        if self.freeze_deadlocks {
-            let mut frozen_boxes = compute_frozen_boxes(&game);
-            self.search_helper(
+        let mut result = SearchResult::Impossible;
+
+        for pos in self.initial_player_positions.clone() {
+            let mut game = self.initial_game.clone();
+            game.set_player(pos);
+
+            let mut frozen_boxes = if self.freeze_deadlocks {
+                compute_frozen_boxes(&game)
+            } else {
+                Bitvector::new()
+            };
+
+            let search_result = self.search_helper(
                 &mut game,
                 &mut frozen_boxes,
                 0,
@@ -161,19 +171,17 @@ impl<H: Heuristic, T: Tracer, S: SearchHelper> Searcher<H, T, S> {
                 target_check,
                 self.initial_boxes_hash,
                 0,
-            )
-        } else {
-            let mut frozen_boxes = Bitvector::new();
-            self.search_helper(
-                &mut game,
-                &mut frozen_boxes,
-                0,
-                threshold,
-                target_check,
-                self.initial_boxes_hash,
-                0,
-            )
+            );
+
+            match search_result {
+                SearchResult::Solved(_) => return search_result,
+                SearchResult::Cutoff => return search_result,
+                SearchResult::Exceeded => result = SearchResult::Exceeded,
+                SearchResult::Impossible => {}
+            }
         }
+
+        result
     }
 
     fn reset(&mut self) {
@@ -183,13 +191,16 @@ impl<H: Heuristic, T: Tracer, S: SearchHelper> Searcher<H, T, S> {
         // transposition table always contains the initial state (since when
         // we're doing a forward search we're checking the backward search's
         // table to see if we've finished, and vice versa).
-        self.table.insert(
-            self.initial_hash,
-            TableEntry {
-                parent_hash: 0,
-                g_cost: 0,
-            },
-        );
+        for &pos in &self.initial_player_positions {
+            let initial_hash = self.initial_boxes_hash ^ self.zobrist.player_hash(pos);
+            self.table.insert(
+                initial_hash,
+                TableEntry {
+                    parent_hash: 0,
+                    g_cost: 0,
+                },
+            );
+        }
     }
 
     /// Perform DFS A* search up to the specified threshold
@@ -385,7 +396,7 @@ impl<H: Heuristic, T: Tracer, S: SearchHelper> Searcher<H, T, S> {
 impl SearchHelper for ForwardsSearchHelper {
     type Move = Push;
 
-    fn compute_moves(&self, game: &Game) -> (Moves<Push>, Option<Position>) {
+    fn compute_moves(&self, game: &Game) -> (Moves<Push>, Position) {
         if self.pi_corrals {
             game.compute_pi_corral_pushes()
         } else {
@@ -418,7 +429,7 @@ impl SearchHelper for ForwardsSearchHelper {
 impl SearchHelper for BackwardsSearchHelper {
     type Move = Pull;
 
-    fn compute_moves(&self, game: &Game) -> (Moves<Pull>, Option<Position>) {
+    fn compute_moves(&self, game: &Game) -> (Moves<Pull>, Position) {
         game.compute_pulls()
     }
 
@@ -459,6 +470,8 @@ impl<H: Heuristic, T: Tracer> Solver<H, T> {
         let zobrist = Rc::new(Zobrist::new());
         let tracer = tracer.map(|t| Rc::new(t));
         let goal_state = game.make_goal_state();
+        let forward_player_positions = vec![game.canonical_player_pos()];
+        let reverse_player_positions = goal_state.all_possible_player_positions();
 
         Solver {
             forward: Searcher::new(
@@ -466,6 +479,7 @@ impl<H: Heuristic, T: Tracer> Solver<H, T> {
                 max_nodes_explored,
                 forward_heuristic,
                 game,
+                forward_player_positions,
                 freeze_deadlocks,
                 tracer.clone(),
                 ForwardsSearchHelper { pi_corrals },
@@ -475,6 +489,7 @@ impl<H: Heuristic, T: Tracer> Solver<H, T> {
                 max_nodes_explored,
                 reverse_heuristic,
                 goal_state,
+                reverse_player_positions,
                 false,
                 tracer,
                 BackwardsSearchHelper,
