@@ -14,7 +14,7 @@ pub enum Tile {
     Goal,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Direction {
     Up,
     Down,
@@ -92,13 +92,13 @@ pub trait Move: fmt::Display {
     fn direction(&self) -> Direction;
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Push {
     box_index: Index,
     direction: Direction,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Pull {
     box_index: Index,
     direction: Direction,
@@ -221,6 +221,11 @@ impl<T: Move> Moves<T> {
     pub fn contains(&self, move_: T) -> bool {
         let dir_idx = move_.direction().index();
         self.bits[dir_idx].contains(move_.box_index())
+    }
+
+    pub fn remove(&mut self, move_: T) {
+        let dir_idx = move_.direction().index();
+        self.bits[dir_idx].remove(move_.box_index());
     }
 
     pub fn iter(&self) -> MovesIter<T> {
@@ -662,44 +667,54 @@ impl Game {
         self.player_dfs(self.player, &mut reachable, |_pos, _dir, _box_idx| {})
     }
 
-    /// Compute all possible box pushes from the current game state.
+    /// Compute possible box pushes from the current game state.
     /// Uses a single DFS from player position to find all reachable boxes.
     /// Returns the pushes and the canonicalized (lexicographically smallest) player position.
     pub fn compute_pushes(&self, pruning: Pruning) -> (Moves<Push>, Position) {
         let mut player_reachable = LazyBitboard::new();
         let mut player_reachable_boxes = Bitvector::new();
-        let dead_squares = pruning != Pruning::None;
+        let mut corrals_visited = LazyBitboard::new();
+        let mut corral_cost = usize::MAX;
 
         let (mut pushes, canonical_pos) =
-            self.compute_pushes_helper(dead_squares, &mut player_reachable, &mut player_reachable_boxes);
+            self.compute_all_pushes(&mut player_reachable, &mut player_reachable_boxes);
 
-        if pruning == Pruning::PiCorrals {
-            let mut corrals_visited = LazyBitboard::new();
-            let mut min_cost = usize::MAX;
+        for push in pushes.iter() {
+            let box_pos = self.box_position(push.box_index);
+            let Some(new_pos) = self.move_position(box_pos, push.direction) else {
+                panic!("Invalid push");
+            };
 
-            // Now walk through each push and examine the other side of the push for
-            // a PI corral. Note that we only need to consider corrals that are the
-            // other side of a valid player push (any corral NOT on the other side
-            // of a player push full the "P" condition of a PI-corral).
-            for push in pushes.iter() {
-                let box_pos = self.box_position(push.box_index);
-                let Some(new_pos) = self.move_position(box_pos, push.direction) else {
-                    panic!("Invalid push");
-                };
-                if !player_reachable.get(new_pos) && !corrals_visited.get(new_pos) {
-                    if let Some((corral_pushes, cost)) = self.compute_pi_corral_helper(
-                        new_pos,
-                        &player_reachable,
-                        player_reachable_boxes,
-                        &mut corrals_visited,
-                    ) {
-                        // If we've found a PI-corral, check if this is is the
-                        // lowest "cost" PI-corral we've found so far. If it is, set
-                        // the player pushes to this PI-corral's pushes.
-                        if cost < min_cost {
-                            pushes = corral_pushes;
-                            min_cost = cost;
-                        }
+            // Dead square pruning: remove dead squares.
+            // Note: we don't have to do this if we found a PI-corral (below),
+            // since PI-corrals are guaranteed to have all dead square pushes
+            // already removed.
+            let found_pi_corral = corral_cost < usize::MAX;
+            if pruning != Pruning::None && self.is_dead_square(new_pos) && !found_pi_corral {
+                pushes.remove(push);
+            }
+
+            // PI-corral pruning: examine the other side of the push for a
+            // PI-corral. Note that we only need to consider corrals that are
+            // the other side of a valid player push (any corral NOT on the
+            // other side of a player push full the "P" condition of a
+            // PI-corral).
+            if pruning == Pruning::PiCorrals
+                && !player_reachable.get(new_pos)
+                && !corrals_visited.get(new_pos)
+            {
+                if let Some((new_pushes, new_cost)) = self.compute_pi_corral_helper(
+                    new_pos,
+                    &player_reachable,
+                    player_reachable_boxes,
+                    &mut corrals_visited,
+                ) {
+                    // If we've found a PI-corral, check if this is is the
+                    // lowest "cost" PI-corral we've found so far. If it is, set
+                    // the player pushes to this PI-corral's pushes.
+                    if new_cost < corral_cost {
+                        pushes = new_pushes;
+                        corral_cost = new_cost;
                     }
                 }
             }
@@ -708,9 +723,8 @@ impl Game {
         (pushes, canonical_pos)
     }
 
-    fn compute_pushes_helper(
+    fn compute_all_pushes(
         &self,
-        dead_squares: bool,
         visited: &mut LazyBitboard,
         boxes: &mut Bitvector,
     ) -> (Moves<Push>, Position) {
@@ -719,8 +733,7 @@ impl Game {
             boxes.add(box_idx);
             let box_pos = self.box_position(box_idx);
             if let Some(dest_pos) = self.move_position(box_pos, dir) {
-                let dominated = dead_squares && self.is_dead_square(dest_pos);
-                if !self.is_blocked(dest_pos) && !dominated {
+                if !self.is_blocked(dest_pos) {
                     pushes.add(box_idx, dir);
                 }
             }
@@ -800,12 +813,12 @@ impl Game {
                     if self.is_blocked(next_pos) {
                         continue;
                     }
-                    // Ignore pushes into a dead square
-                    if self.is_dead_square(next_pos) {
-                        continue;
-                    }
                     // Ignore pushes coming from a wall
                     if self.get_tile(player_pos) == Tile::Wall {
+                        continue;
+                    }
+                    // Ignore pushes into dead squares
+                    if self.is_dead_square(next_pos) {
                         continue;
                     }
                     // Check I condition: the push must lead into the corral
@@ -962,6 +975,8 @@ impl fmt::Display for Game {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashSet;
+
     use super::*;
 
     #[test]
@@ -1316,8 +1331,8 @@ mod tests {
 "#,
         );
         let (pushes, canonical_pos) = game.compute_pushes(Pruning::DeadSquares);
-        let mut actual = pushes.iter().collect::<Vec<_>>();
-        let mut expected = vec![
+        let actual = pushes.iter().collect::<HashSet<_>>();
+        let expected = HashSet::from([
             Push {
                 box_index: Index(0),
                 direction: Direction::Up,
@@ -1330,10 +1345,7 @@ mod tests {
                 box_index: Index(1),
                 direction: Direction::Left,
             },
-        ];
-
-        expected.sort();
-        actual.sort();
+        ]);
         assert_eq!(expected, actual);
 
         // Check canonical position - should be lexicographically smallest reachable position
@@ -1588,6 +1600,25 @@ mod tests {
         check_pi_corral(&game, 8, 7, Some((corral2_moves, corral2_size)));
     }
 
+    #[test]
+    fn test_pi_corral_8() {
+        let game = parse_game(
+            r#"
+######
+#.   #
+#.$@ #
+#.  $#
+#  $ #
+######
+"#,
+        );
+
+        let (pushes, _) = game.compute_pushes(Pruning::PiCorrals);
+        let actual = pushes.iter().collect::<HashSet<_>>();
+        let expected = HashSet::new();
+        assert_eq!(expected, actual);
+    }
+
     fn parse_game(text: &str) -> Game {
         Game::from_text(text.trim_matches('\n')).unwrap()
     }
@@ -1597,7 +1628,7 @@ mod tests {
         let mut player_reachable_boxes: Bitvector = Bitvector::new();
         let mut corrals_visited = LazyBitboard::new();
 
-        game.compute_pushes_helper(true, &mut player_reachable, &mut player_reachable_boxes);
+        game.compute_all_pushes(&mut player_reachable, &mut player_reachable_boxes);
 
         let result = game.compute_pi_corral_helper(
             Position(x, y),

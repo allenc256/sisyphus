@@ -214,11 +214,6 @@ impl<H: Heuristic, S: SearchHelper> Searcher<H, S> {
     {
         self.nodes_explored += 1;
 
-        // Check if we've exceeded the node limit
-        if self.nodes_explored > self.max_nodes_explored {
-            return SearchResult::Cutoff;
-        }
-
         // Compute heuristic and f-cost (with caching)
         let mut f_cost = g_cost;
         let h_cost = if let Some(&cached) = self.heuristic_cache.get(&boxes_hash) {
@@ -236,6 +231,13 @@ impl<H: Heuristic, S: SearchHelper> Searcher<H, S> {
         // If f-cost exceeds threshold, stop searching this branch
         if f_cost > threshold {
             return SearchResult::Exceeded;
+        }
+
+        if self.should_trace() {
+            println!(
+                "count={}, f_cost={}, g_cost={}, threshold={}, frozen={}:\n{}",
+                self.nodes_explored, f_cost, g_cost, threshold, frozen_boxes, game
+            );
         }
 
         // Get all valid pushes and canonical position
@@ -266,6 +268,11 @@ impl<H: Heuristic, S: SearchHelper> Searcher<H, S> {
             return SearchResult::Solved(Box::new(game.clone()));
         }
 
+        // Check if we've exceeded the node limit
+        if self.nodes_explored >= self.max_nodes_explored {
+            return SearchResult::Cutoff;
+        }
+
         let mut result = SearchResult::Impossible;
 
         // Try each push
@@ -273,19 +280,6 @@ impl<H: Heuristic, S: SearchHelper> Searcher<H, S> {
             let old_box_pos = game.box_position(move_.box_index());
             self.helper.apply_move(game, &move_);
             let new_box_pos = game.box_position(move_.box_index());
-
-            if self.should_trace() {
-                println!(
-                    "move={}, pos={}, count={}, f_cost={}, g_cost={}, threshold={}:\n{}",
-                    move_,
-                    game.box_position(move_.box_index()),
-                    self.nodes_explored,
-                    f_cost,
-                    g_cost,
-                    threshold,
-                    game
-                );
-            }
 
             // Compute frozen boxes
             let new_frozen =

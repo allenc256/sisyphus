@@ -1,6 +1,6 @@
 use std::{fmt, mem::MaybeUninit};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Index(pub u8);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -19,7 +19,14 @@ pub struct Bitvector {
 
 impl fmt::Display for Bitvector {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{:064b}", self.bits)
+        write!(f, "{{")?;
+        for (i, item) in self.iter().enumerate() {
+            if i > 0 {
+                write!(f, ", ")?;
+            }
+            write!(f, "#{}", item.0 + 1)?;
+        }
+        write!(f, "}}")
     }
 }
 
@@ -35,7 +42,9 @@ impl Bitvector {
         } else if n >= 64 {
             Self { bits: u64::MAX }
         } else {
-            Self { bits: (1u64 << n) - 1 }
+            Self {
+                bits: (1u64 << n) - 1,
+            }
         }
     }
 

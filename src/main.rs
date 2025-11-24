@@ -154,6 +154,36 @@ fn solve_level(game: &Game, opts: SolveOpts, heuristic_type: HeuristicType) -> L
     }
 }
 
+fn parse_trace_range(s: &str) -> Result<Range<usize>, String> {
+    // Try parsing as "start..=end" (inclusive)
+    if let Some((start, end)) = s.split_once("..=") {
+        let start: usize = start
+            .parse()
+            .map_err(|_| format!("invalid start: {}", start))?;
+        let end: usize = end.parse().map_err(|_| format!("invalid end: {}", end))?;
+        if start > end {
+            return Err("start must be <= end".to_string());
+        }
+        return Ok(start..end + 1);
+    }
+
+    // Try parsing as "start..end" (exclusive)
+    if let Some((start, end)) = s.split_once("..") {
+        let start: usize = start
+            .parse()
+            .map_err(|_| format!("invalid start: {}", start))?;
+        let end: usize = end.parse().map_err(|_| format!("invalid end: {}", end))?;
+        if start > end {
+            return Err("start must be <= end".to_string());
+        }
+        return Ok(start..end);
+    }
+
+    // Try parsing as a single integer
+    let n: usize = s.parse().map_err(|_| format!("invalid value: {}", s))?;
+    Ok(n..n + 1)
+}
+
 #[derive(Parser)]
 #[command(name = "sisyphus")]
 #[command(about = "A Sokoban solver", long_about = None)]
@@ -194,9 +224,9 @@ struct Args {
     #[arg(long, value_enum, default_value = "pi-corrals")]
     pruning: PruningArg,
 
-    /// Range of move numbers to trace (start, end)
-    #[arg(long, num_args = 2)]
-    trace_range: Option<Vec<usize>>,
+    /// Range of node counts to trace (e.g., "100..200", "100..=200", or "100")
+    #[arg(long, value_parser = parse_trace_range)]
+    trace_range: Option<Range<usize>>,
 }
 
 fn main() {
@@ -240,26 +270,14 @@ fn main() {
         std::process::exit(1);
     }
 
-    // Validate trace_range
-    if let Some(ref range) = args.trace_range {
-        if range[0] > range[1] {
-            eprintln!("Error: trace range start must be <= end");
-            std::process::exit(1);
-        }
-    }
-
     // Solve each level in the range
     let mut total_solved = 0;
     let mut total_steps = 0;
     let mut total_states = 0;
     let mut total_time_ms = 0;
 
-    // Parse trace_range from Vec to Range (use 0..0 for no tracing)
-    let trace_range = args
-        .trace_range
-        .as_ref()
-        .map(|v| v[0]..v[1] + 1)
-        .unwrap_or(0..0);
+    // Use 0..0 for no tracing
+    let trace_range = args.trace_range.unwrap_or(0..0);
 
     for level_num in args.level_start..=level_end {
         let game = levels.get(level_num - 1).unwrap();
