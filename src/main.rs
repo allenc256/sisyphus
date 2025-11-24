@@ -11,12 +11,12 @@ use game::Game;
 use heuristic::{Heuristic, NullHeuristic, SimpleHeuristic};
 use levels::Levels;
 use solver::{SearchType, SolveResult, Solver};
+use std::ops::Range;
 use std::time::Instant;
 
 use crate::{
     game::{Move, Pruning, Push},
     heuristic::GreedyHeuristic,
-    solver::Tracer,
 };
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
@@ -81,45 +81,6 @@ fn print_solution(game: &Game, solution: &[Push]) {
     }
 }
 
-struct VerboseTracer {
-    trace_start: usize,
-    trace_end: usize,
-}
-
-impl VerboseTracer {
-    fn new(from_move: usize, to_move: usize) -> Self {
-        Self {
-            trace_start: from_move,
-            trace_end: to_move,
-        }
-    }
-}
-
-impl Tracer for VerboseTracer {
-    fn trace<M: Move>(
-        &self,
-        game: &Game,
-        nodes_explored: usize,
-        threshold: usize,
-        f_cost: usize,
-        g_cost: usize,
-        move_: &M,
-    ) {
-        if self.trace_start <= nodes_explored && nodes_explored <= self.trace_end {
-            println!(
-                "move={}, pos={}, count={}, f_cost={}, g_cost={}, threshold={}:\n{}",
-                move_,
-                game.box_position(move_.box_index()),
-                nodes_explored,
-                f_cost,
-                g_cost,
-                threshold,
-                game
-            );
-        }
-    }
-}
-
 struct LevelStats {
     solved: bool,
     steps: usize,
@@ -134,23 +95,17 @@ struct SolveOpts {
     print_solution: bool,
     freeze_deadlocks: bool,
     pruning: Pruning,
-    trace_range: Option<(usize, usize)>,
+    trace_range: Range<usize>,
 }
 
 fn solve_level_helper<H: Heuristic>(game: &Game, opts: SolveOpts) -> LevelStats {
-    let tracer: Option<VerboseTracer> = if let Some((trace_start, trace_end)) = opts.trace_range {
-        Some(VerboseTracer::new(trace_start, trace_end))
-    } else {
-        None
-    };
-
-    let mut solver: Solver<H, VerboseTracer> = Solver::new(
+    let mut solver: Solver<H> = Solver::new(
         opts.max_nodes_explored,
         opts.search_type,
         game.clone(),
         opts.freeze_deadlocks,
         opts.pruning,
-        tracer,
+        opts.trace_range,
     );
     let start = Instant::now();
     let result = solver.solve();
@@ -299,8 +254,12 @@ fn main() {
     let mut total_states = 0;
     let mut total_time_ms = 0;
 
-    // Parse trace_range from Vec to tuple
-    let trace_range = args.trace_range.as_ref().map(|v| (v[0], v[1]));
+    // Parse trace_range from Vec to Range (use 0..0 for no tracing)
+    let trace_range = args
+        .trace_range
+        .as_ref()
+        .map(|v| v[0]..v[1] + 1)
+        .unwrap_or(0..0);
 
     for level_num in args.level_start..=level_end {
         let game = levels.get(level_num - 1).unwrap();
@@ -311,7 +270,7 @@ fn main() {
             print_solution: args.print_solution,
             freeze_deadlocks: !args.no_freeze_deadlocks,
             pruning: args.pruning.into(),
-            trace_range,
+            trace_range: trace_range.clone(),
         };
         let stats = solve_level(game, opts, args.heuristic);
 
