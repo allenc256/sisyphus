@@ -301,6 +301,8 @@ struct Boxes {
     positions: ArrayVec<Position, MAX_BOXES>,
     // Maps board position to box index (NO_BOX = no box at this position)
     index: [[Index; MAX_SIZE]; MAX_SIZE],
+    // Boxes that are not on goal positions
+    unsolved: Bitvector,
 }
 
 impl Boxes {
@@ -308,21 +310,33 @@ impl Boxes {
         Boxes {
             positions: ArrayVec::new(),
             index: [[NO_BOX; MAX_SIZE]; MAX_SIZE],
+            unsolved: Bitvector::new(),
         }
     }
 
-    fn add(&mut self, pos: Position) -> Index {
+    fn add(&mut self, pos: Position, is_goal: bool) -> Index {
         let index = Index(self.positions.len() as u8);
         self.index[pos.1 as usize][pos.0 as usize] = index;
         self.positions.push(pos);
+        if !is_goal {
+            self.unsolved.add(index);
+        }
         index
     }
 
-    fn move_box(&mut self, from: Position, to: Position) {
+    fn move_(&mut self, from: Position, to: Position, from_is_goal: bool, to_is_goal: bool) {
         let idx = self.index[from.1 as usize][from.0 as usize];
         self.positions[idx.0 as usize] = to;
         self.index[from.1 as usize][from.0 as usize] = NO_BOX;
         self.index[to.1 as usize][to.0 as usize] = idx;
+
+        // Update unsolved boxes
+        if from_is_goal {
+            self.unsolved.add(idx);
+        }
+        if to_is_goal {
+            self.unsolved.remove(idx);
+        }
     }
 
     fn has_box_at(&self, pos: Position) -> bool {
@@ -334,7 +348,6 @@ impl Boxes {
 pub struct Game {
     tiles: [[Tile; MAX_SIZE]; MAX_SIZE],
     player: Position,
-    unsolved_boxes: Bitvector,
     width: u8,
     height: u8,
     boxes: Boxes,
@@ -381,7 +394,6 @@ impl Game {
         let mut player = None;
         let mut boxes = Boxes::new();
         let mut goal_positions = ArrayVec::new();
-        let mut unsolved_boxes = Bitvector::new();
 
         for (y, line) in lines.iter().enumerate() {
             for (x, ch) in line.chars().enumerate() {
@@ -394,13 +406,12 @@ impl Game {
                     }
                     '$' => {
                         tiles[y][x] = Tile::Floor;
-                        let box_idx = boxes.add(Position(x as u8, y as u8));
-                        unsolved_boxes.add(box_idx);
+                        boxes.add(Position(x as u8, y as u8), false);
                     }
                     '*' => {
                         tiles[y][x] = Tile::Goal;
                         goal_positions.push(Position(x as u8, y as u8));
-                        boxes.add(Position(x as u8, y as u8));
+                        boxes.add(Position(x as u8, y as u8), true);
                     }
                     '@' => {
                         tiles[y][x] = Tile::Floor;
@@ -443,7 +454,6 @@ impl Game {
         let mut game = Game {
             tiles,
             player,
-            unsolved_boxes,
             width: width as u8,
             height: height as u8,
             boxes,
@@ -559,7 +569,7 @@ impl Game {
     }
 
     pub fn unsolved_boxes(&self) -> Bitvector {
-        self.unsolved_boxes
+        self.boxes.unsolved
     }
 
     pub fn is_push_dead_square(&self, pos: Position) -> bool {
@@ -614,18 +624,11 @@ impl Game {
         );
 
         let source_tile = self.get_tile(box_pos);
+        let source_is_goal = source_tile == Tile::Goal;
         let dest_is_goal = dest_tile == Tile::Goal;
 
-        // Update unsolved_boxes
-        if source_tile == Tile::Goal {
-            self.unsolved_boxes.add(push.box_index);
-        }
-        if dest_is_goal {
-            self.unsolved_boxes.remove(push.box_index);
-        }
-
         // Update box position
-        self.boxes.move_box(box_pos, new_pos);
+        self.boxes.move_(box_pos, new_pos, source_is_goal, dest_is_goal);
 
         // Update player position to where the box was
         self.player = box_pos;
@@ -646,18 +649,12 @@ impl Game {
             .expect("Pull player position out of bounds");
 
         let current_tile = self.get_tile(new_pos);
+        let current_is_goal = current_tile == Tile::Goal;
         let old_tile = self.get_tile(old_pos);
-
-        // Update unsolved_boxes
-        if current_tile == Tile::Goal {
-            self.unsolved_boxes.add(pull.box_index); // Removing box from goal
-        }
-        if old_tile == Tile::Goal {
-            self.unsolved_boxes.remove(pull.box_index); // Placing box on goal
-        }
+        let old_is_goal = old_tile == Tile::Goal;
 
         // Move box back
-        self.boxes.move_box(new_pos, old_pos);
+        self.boxes.move_(new_pos, old_pos, current_is_goal, old_is_goal);
 
         // Restore player position
         self.player = player_old_pos;
@@ -665,7 +662,7 @@ impl Game {
 
     /// Check if all boxes are on goals (win condition)
     pub fn is_solved(&self) -> bool {
-        self.unsolved_boxes.is_empty()
+        self.boxes.unsolved.is_empty()
     }
 
     /// Create a new game state with boxes and goals swapped.
@@ -674,15 +671,12 @@ impl Game {
     pub fn swap_boxes_and_goals(&self) -> Self {
         // Build new boxes with positions at goal locations
         let mut boxes = Boxes::new();
-        let mut unsolved_boxes = Bitvector::new();
         let new_goal_positions = self.boxes.positions.clone();
 
         for &goal_pos in &self.goal_positions {
-            let box_idx = boxes.add(goal_pos);
-            // Box is unsolved if it's not on one of the new goals (original box positions)
-            if !new_goal_positions.contains(&goal_pos) {
-                unsolved_boxes.add(box_idx);
-            }
+            // Box is on goal if it's on one of the new goals (original box positions)
+            let is_goal = new_goal_positions.contains(&goal_pos);
+            boxes.add(goal_pos, is_goal);
         }
 
         // Update tiles: old goals become floor, old box positions become goals
@@ -698,7 +692,6 @@ impl Game {
             tiles,
             boxes,
             goal_positions: new_goal_positions,
-            unsolved_boxes,
             push_dead_squares: RawBitboard::new(),
             pull_dead_squares: RawBitboard::new(),
             ..self.clone()
@@ -1097,7 +1090,7 @@ mod tests {
                      #  ###\n\
                      ####";
         let game = Game::from_text(input).unwrap();
-        assert_eq!(game.unsolved_boxes.len(), 1);
+        assert_eq!(game.boxes.unsolved.len(), 1);
         assert!(!game.is_solved());
 
         // Board with all boxes on goals
@@ -1105,7 +1098,7 @@ mod tests {
                           #*@#\n\
                           ####";
         let game = Game::from_text(all_solved).unwrap();
-        assert_eq!(game.unsolved_boxes.len(), 0);
+        assert_eq!(game.boxes.unsolved.len(), 0);
         assert!(game.is_solved());
 
         // Board with no boxes on goals
@@ -1114,7 +1107,7 @@ mod tests {
                            # @#\n\
                            ####";
         let game = Game::from_text(none_solved).unwrap();
-        assert_eq!(game.unsolved_boxes.len(), 1);
+        assert_eq!(game.boxes.unsolved.len(), 1);
         assert!(!game.is_solved());
     }
 
@@ -1168,7 +1161,7 @@ mod tests {
         assert_eq!(game.player, Position(2, 1));
         // Should be solved
         assert!(game.is_solved());
-        assert_eq!(game.unsolved_boxes.len(), 0);
+        assert_eq!(game.boxes.unsolved.len(), 0);
     }
 
     #[test]
@@ -1242,7 +1235,7 @@ mod tests {
                      ####";
         let mut game = Game::from_text(input).unwrap();
 
-        assert_eq!(game.unsolved_boxes.len(), 1);
+        assert_eq!(game.boxes.unsolved.len(), 1);
         let box_idx = game.boxes.index[1][2];
         game.push(Push {
             box_index: box_idx,
@@ -1251,7 +1244,7 @@ mod tests {
 
         assert_eq!(game.get_tile(Position(3, 1)), Tile::Goal);
         assert!(game.boxes.has_box_at(Position(3, 1)));
-        assert_eq!(game.unsolved_boxes.len(), 0);
+        assert_eq!(game.boxes.unsolved.len(), 0);
     }
 
     #[test]
@@ -1262,7 +1255,7 @@ mod tests {
                      #####";
         let mut game = Game::from_text(input).unwrap();
 
-        assert_eq!(game.unsolved_boxes.len(), 0);
+        assert_eq!(game.boxes.unsolved.len(), 0);
         assert_eq!(game.get_tile(Position(2, 1)), Tile::Goal);
         assert!(game.boxes.has_box_at(Position(2, 1)));
 
@@ -1276,7 +1269,7 @@ mod tests {
         assert!(!game.boxes.has_box_at(Position(2, 1)));
         assert_eq!(game.get_tile(Position(3, 1)), Tile::Floor);
         assert!(game.boxes.has_box_at(Position(3, 1)));
-        assert_eq!(game.unsolved_boxes.len(), 1);
+        assert_eq!(game.boxes.unsolved.len(), 1);
         assert_eq!(game.player, Position(2, 1));
     }
 
@@ -1288,7 +1281,7 @@ mod tests {
                      ######";
         let mut game = Game::from_text(input).unwrap();
 
-        assert_eq!(game.unsolved_boxes.len(), 1);
+        assert_eq!(game.boxes.unsolved.len(), 1);
         let box_idx = game.boxes.index[1][2];
         game.push(Push {
             box_index: box_idx,
@@ -1299,7 +1292,7 @@ mod tests {
         assert!(!game.boxes.has_box_at(Position(2, 1)));
         assert_eq!(game.get_tile(Position(3, 1)), Tile::Goal);
         assert!(game.boxes.has_box_at(Position(3, 1)));
-        assert_eq!(game.unsolved_boxes.len(), 1);
+        assert_eq!(game.boxes.unsolved.len(), 1);
     }
 
     #[test]
@@ -1417,7 +1410,7 @@ mod tests {
         // Save original state
         let original_player = game.player;
         let original_boxes = game.boxes.clone();
-        let original_goals = game.unsolved_boxes.len();
+        let original_goals = game.boxes.unsolved.len();
 
         // Push box right
         let box_idx = game.boxes.index[1][2];
@@ -1430,7 +1423,7 @@ mod tests {
         // Verify state changed
         assert_eq!(game.player, Position(2, 1));
         assert!(game.boxes.has_box_at(Position(3, 1)));
-        assert_eq!(game.unsolved_boxes.len(), 0);
+        assert_eq!(game.boxes.unsolved.len(), 0);
         assert!(game.is_solved());
 
         // Pull
@@ -1439,7 +1432,7 @@ mod tests {
         // Should be back to original state
         assert_eq!(game.player, original_player);
         assert_eq!(game.boxes, original_boxes);
-        assert_eq!(game.unsolved_boxes.len(), original_goals);
+        assert_eq!(game.boxes.unsolved.len(), original_goals);
         assert!(!game.is_solved());
     }
 
@@ -1472,8 +1465,8 @@ mod tests {
             assert_eq!(game.player, original.player, "Failed for {:?}", direction);
             assert_eq!(game.boxes, original.boxes, "Failed for {:?}", direction);
             assert_eq!(
-                game.unsolved_boxes.len(),
-                original.unsolved_boxes.len(),
+                game.boxes.unsolved.len(),
+                original.boxes.unsolved.len(),
                 "Failed for {:?}",
                 direction
             );
