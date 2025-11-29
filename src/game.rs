@@ -339,7 +339,8 @@ pub struct Game {
     height: u8,
     boxes: Boxes,
     goal_positions: ArrayVec<Position, MAX_BOXES>,
-    dead_squares: Bitboard,
+    push_dead_squares: Bitboard,
+    pull_dead_squares: Bitboard,
 }
 
 impl Game {
@@ -447,7 +448,8 @@ impl Game {
             height: height as u8,
             boxes,
             goal_positions,
-            dead_squares: Bitboard::new(),
+            push_dead_squares: Bitboard::new(),
+            pull_dead_squares: Bitboard::new(),
         };
         game.compute_dead_squares();
         Ok(game)
@@ -455,18 +457,22 @@ impl Game {
 
     /// Compute all dead squares where a box can never reach any goal.
     fn compute_dead_squares(&mut self) {
-        let mut reachable = Bitboard::new();
+        let mut push_reachable = Bitboard::new();
+        let mut pull_reachable = Bitboard::new();
 
         // For each goal, find all squares that can reach it via reverse pushes
         for &goal_pos in &self.goal_positions {
-            self.dfs_reachable(goal_pos, &mut reachable);
+            self.dfs_push_reachable(goal_pos, &mut push_reachable);
+            self.dfs_pull_reachable(goal_pos, &mut pull_reachable);
         }
 
-        self.dead_squares = reachable.invert()
+        self.push_dead_squares = push_reachable.invert();
+        self.pull_dead_squares = pull_reachable.invert();
     }
 
     /// DFS to find all squares from which a box could be pushed to reach the given position.
-    fn dfs_reachable(&self, start_pos: Position, reachable: &mut Bitboard) {
+    /// Uses reverse pushes (pulls).
+    fn dfs_push_reachable(&self, start_pos: Position, reachable: &mut Bitboard) {
         if reachable.get(start_pos) {
             return;
         }
@@ -490,6 +496,39 @@ impl Game {
                         {
                             reachable.set(from_pos);
                             stack.push(from_pos);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// DFS to find all squares from which a box could be pulled to reach the given position.
+    /// Uses forward pushes.
+    fn dfs_pull_reachable(&self, start_pos: Position, reachable: &mut Bitboard) {
+        if reachable.get(start_pos) {
+            return;
+        }
+
+        let mut stack: ArrayVec<Position, { MAX_SIZE * MAX_SIZE }> = ArrayVec::new();
+
+        reachable.set(start_pos);
+        stack.push(start_pos);
+
+        while let Some(pos) = stack.pop() {
+            if self.get_tile(pos) == Tile::Wall {
+                continue;
+            }
+
+            for direction in ALL_DIRECTIONS {
+                if let Some(to_pos) = self.move_position(pos, direction) {
+                    if let Some(player_pos) = self.move_position(pos, direction.reverse()) {
+                        if !reachable.get(to_pos)
+                            && self.get_tile(to_pos) != Tile::Wall
+                            && self.get_tile(player_pos) != Tile::Wall
+                        {
+                            reachable.set(to_pos);
+                            stack.push(to_pos);
                         }
                     }
                 }
@@ -521,8 +560,12 @@ impl Game {
         self.unsolved_boxes
     }
 
-    pub fn is_dead_square(&self, pos: Position) -> bool {
-        self.dead_squares.get(pos)
+    pub fn is_push_dead_square(&self, pos: Position) -> bool {
+        self.push_dead_squares.get(pos)
+    }
+
+    pub fn is_pull_dead_square(&self, pos: Position) -> bool {
+        self.pull_dead_squares.get(pos)
     }
 
     /// Get the box index at the given position, if any.
@@ -654,7 +697,8 @@ impl Game {
             boxes,
             goal_positions: new_goal_positions,
             unsolved_boxes,
-            dead_squares: Bitboard::new(),
+            push_dead_squares: Bitboard::new(),
+            pull_dead_squares: Bitboard::new(),
             ..self.clone()
         };
         game.compute_dead_squares();
@@ -690,7 +734,7 @@ impl Game {
             // since PI-corrals are guaranteed to have all dead square pushes
             // already removed.
             let found_pi_corral = corral_cost < usize::MAX;
-            if pruning != Pruning::None && self.is_dead_square(new_pos) && !found_pi_corral {
+            if pruning != Pruning::None && self.is_push_dead_square(new_pos) && !found_pi_corral {
                 pushes.remove(push);
             }
 
@@ -818,7 +862,7 @@ impl Game {
                         continue;
                     }
                     // Ignore pushes into dead squares
-                    if self.is_dead_square(next_pos) {
+                    if self.is_push_dead_square(next_pos) {
                         continue;
                     }
                     // Check I condition: the push must lead into the corral
@@ -845,17 +889,23 @@ impl Game {
 
     /// Compute all possible pulls from the current game state.
     /// Returns the pulls and the canonicalized (lexicographically smallest) player position.
-    pub fn compute_pulls(&self) -> (Moves<Pull>, Position) {
+    pub fn compute_pulls(&self, pruning: Pruning) -> (Moves<Pull>, Position) {
         let mut pulls = Moves::new();
         let mut visited = LazyBitboard::new();
         let canonical_pos =
             self.player_dfs(self.player, &mut visited, |player_pos, dir, box_idx| {
                 if let Some(dest_pos) = self.move_position(player_pos, dir.reverse()) {
                     if !self.is_blocked(dest_pos) {
+                        // Check for pull-dead square during DFS
+                        // After the pull, the box will be at player_pos
+                        if pruning != Pruning::None && self.is_pull_dead_square(player_pos) {
+                            return;
+                        }
                         pulls.add(box_idx, dir.reverse());
                     }
                 }
             });
+
         (pulls, canonical_pos)
     }
 
@@ -1360,7 +1410,7 @@ mod tests {
                      # $+ #\n\
                      #####";
         let game = Game::from_text(input).unwrap();
-        let (pulls, canonical_pos) = game.compute_pulls();
+        let (pulls, canonical_pos) = game.compute_pulls(Pruning::None);
         let actual = pulls.iter().collect::<Vec<_>>();
         assert_eq!(
             actual,

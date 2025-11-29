@@ -75,7 +75,9 @@ struct ForwardsSearchHelper {
     pruning: Pruning,
 }
 
-struct BackwardsSearchHelper;
+struct BackwardsSearchHelper {
+    pruning: Pruning,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SearchType {
@@ -404,7 +406,7 @@ impl SearchHelper for ForwardsSearchHelper {
     }
 
     fn compute_unmoves(&self, game: &Game) -> Moves<Push> {
-        game.compute_pulls().0.to_pushes()
+        game.compute_pulls(Pruning::None).0.to_pushes()
     }
 
     fn apply_move(&self, game: &mut Game, push: &Push) {
@@ -429,7 +431,7 @@ impl SearchHelper for BackwardsSearchHelper {
     type Move = Pull;
 
     fn compute_moves(&self, game: &Game) -> (Moves<Pull>, Position) {
-        game.compute_pulls()
+        game.compute_pulls(self.pruning)
     }
 
     fn compute_unmoves(&self, game: &Game) -> Moves<Pull> {
@@ -490,7 +492,7 @@ impl<H: Heuristic> Solver<H> {
                 reverse_player_positions,
                 false,
                 trace_range,
-                BackwardsSearchHelper,
+                BackwardsSearchHelper { pruning },
             ),
             search_type,
         }

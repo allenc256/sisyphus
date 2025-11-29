@@ -102,7 +102,7 @@ fn check_unfrozen_dir(
 
 fn check_dead_square_dir(game: &Game, pos: Position, dir: Direction) -> bool {
     if let Some(next_pos) = game.move_position(pos, dir) {
-        game.is_dead_square(next_pos)
+        game.is_push_dead_square(next_pos)
     } else {
         true
     }

@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Sisyphus is a Sokoban puzzle solver written in Rust (edition 2024). It uses the IDA* (Iterative Deepening A*) search algorithm with Zobrist hashing-based transposition tables to find optimal solutions to Sokoban puzzles.
+Sisyphus is a Sokoban puzzle solver written in Rust (edition 2024). It uses the IDA* (Iterative Deepening A*) search algorithm with Zobrist hashing-based transposition tables to find optimal solutions to Sokoban puzzles. The solver supports bidirectional search, multiple heuristics, and advanced pruning techniques including dead square detection and PI-corral pruning.
 
 ## Development Commands
 
@@ -24,8 +24,12 @@ cargo run -- levels.xsb 5 --print-solution  # Show step-by-step solution
 cargo run -- levels.xsb 3 -n 10000000  # Set max nodes explored
 cargo run -- levels.xsb 1 -H null      # Use null heuristic (pure iterative deepening)
 cargo run -- levels.xsb 1 -H greedy    # Use greedy heuristic (default)
-cargo run -- levels.xsb 1 -d forwards  # Search forwards from initial state (default)
-cargo run -- levels.xsb 1 -d backwards # Search backwards from goal state
+cargo run -- levels.xsb 1 -d forward   # Search forwards from initial state (default)
+cargo run -- levels.xsb 1 -d reverse   # Search backwards from goal state
+cargo run -- levels.xsb 1 -d bidirectional  # Bidirectional search
+cargo run -- levels.xsb 1 -p none      # No pruning
+cargo run -- levels.xsb 1 -p dead-squares   # Dead square pruning (default)
+cargo run -- levels.xsb 1 -p pi-corrals     # PI-corral pruning (includes dead squares)
 ```
 
 For better performance, use release mode:
@@ -48,47 +52,50 @@ cargo fmt            # Format code
 cargo fmt -- --check # Check formatting without modifying files
 ```
 
-### Other Useful Commands
-```bash
-cargo check          # Quick compile check without building
-cargo clean          # Remove target directory
-cargo doc --open     # Build and open documentation
-```
-
 ## Code Architecture
 
 ### Core Modules
 
-- **game.rs**: Core Sokoban game state representation and logic
+- **game.rs**: Core Sokoban game state representation and move generation
   - `Game`: Represents the board state (tiles, player position, box positions, goals)
-  - `PlayerPos`: Enum representing player position as either Known(x, y) or Unknown
-  - `Push`: Represents a box push move (box index + direction)
-  - `Pushes`: Bitset-based collection of valid pushes
-  - Key methods: `compute_pushes()`, `compute_unpushes()`, `push()`, `unpush()`, `is_solved()`, `set_to_goal_state()`
+  - `Push` and `Pull`: Represent box push/pull moves (box index + direction)
+  - `Moves<T>`: Bitset-based collection of valid moves (generic over Push/Pull)
+  - Key methods: `compute_pushes()`, `compute_pulls()`, `push()`, `pull()`, `is_solved()`
   - Uses position canonicalization: normalizes player position to lexicographically smallest reachable position
-  - Supports both forward pushes and backward unpushes for bidirectional search
+  - Supports both forward pushes and backward pulls for bidirectional search
+  - Computes dead squares (positions where a box can never reach any goal)
+  - Implements PI-corral detection for advanced pruning
 
-- **solver.rs**: IDA* search algorithm implementation
-  - Uses iterative deepening with increasing f-cost thresholds
+- **solver.rs**: IDA* search algorithm with bidirectional search support
+  - `Solver`: Public API managing both forward and backward searchers
+  - `Searcher`: Internal struct performing A* search up to a given threshold
+  - `SearchHelper` trait: Abstracts forward vs backward search (implemented by `ForwardsSearchHelper` and `BackwardsSearchHelper`)
+  - Supports three search types: Forward, Reverse, Bidirectional
   - Transposition table using Zobrist hashing to avoid revisiting states
-  - Node limit to prevent excessive search (default: 5 million)
-  - Returns `Option<Vec<Push>>` with solution path or None
-  - Supports both forward search (from initial state) and backward search (from goal state)
-  - `SearchDirection`: Controls whether to search forwards or backwards
-  - `Searcher`: Internal struct that performs A* search up to a threshold
-  - `Solver`: Public API that manages iterative deepening by repeatedly calling Searcher
+  - Note: Bidirectional search is not guaranteed optimal (see solver.rs:505-510)
+  - Returns `SolveResult` enum (Solved, Impossible, Cutoff)
 
 - **heuristic.rs**: Heuristic functions for A* search
-  - `Heuristic` trait: defines `compute_forward()` and `compute_backward()` methods
-  - `GreedyHeuristic`: Greedy assignment heuristic using Manhattan distance (not admissible)
+  - `Heuristic` trait: defines `new_push()`, `new_pull()`, `compute_forward()`, and `compute_backward()` methods
+  - `GreedyHeuristic`: Greedy assignment heuristic using Manhattan distance (not admissible, but fast)
+  - `SimpleHeuristic`: Simple assignment heuristic (admissible, slower)
   - `NullHeuristic`: Returns 0 (reduces to iterative deepening)
-  - Both methods support forward search (estimating distance to goal) and backward search (estimating distance from start)
+  - Supports heuristic caching for performance
 
 - **zobrist.rs**: Zobrist hashing for game state identification
   - Pre-generates random hash values for each board position
-  - Separate hash tables for box positions and player positions (including Unknown positions)
+  - Separate hash tables for box positions and player positions
   - Enables efficient incremental hash updates during search
-  - Supports hashing of PlayerPos enum (Known positions and Unknown position)
+
+- **deadlocks.rs**: Deadlock detection for pruning unsolvable states
+  - `compute_frozen_boxes()`: Identifies boxes that cannot be moved
+  - `compute_new_frozen_boxes()`: Incremental frozen box computation after a push
+  - Used to prune states where boxes are in positions they cannot escape from
+
+- **bits.rs**: Bit manipulation utilities
+  - `Bitvector`: 64-bit bitvector for efficient set operations on box indices
+  - `Index`: Type-safe wrapper for box indices
+  - `Position`: Type-safe wrapper for (x, y) board positions
 
 - **levels.rs**: XSB format level file parsing
   - Parses levels separated by semicolon-prefixed comments or empty lines
@@ -96,15 +103,26 @@ cargo doc --open     # Build and open documentation
 
 ### Important Design Details
 
-1. **State Representation**: Game states are identified by box positions + canonicalized player position (not the actual player position). This significantly reduces the state space. The player position can be either Known(x, y) or Unknown (used for goal states in backward search).
+1. **State Representation**: Game states are identified by box positions + canonicalized player position (not the actual player position). This significantly reduces the state space by treating all player positions in the same connected region as equivalent.
 
-2. **Move Representation**: The solver works with box pushes rather than player moves. Each push implicitly includes the player movement needed to reach the box. The solver supports both forward pushes (moving boxes toward goals) and backward unpushes (moving boxes away from goals for backward search).
+2. **Move Representation**: The solver works with box pushes/pulls rather than player moves. Each push/pull implicitly includes the player movement needed to reach the box.
 
-3. **Zobrist Hashing**: Incremental hash updates are used during search. When a box moves, the hash is updated by XORing out the old position hash and XORing in the new position hash.
+3. **SearchHelper Trait Pattern**: The `Searcher` struct is generic over a `SearchHelper` trait, allowing the same search code to handle both forward search (using pushes) and backward search (using pulls). This enables bidirectional search without code duplication.
 
-4. **Transposition Table**: Stores both the parent state hash and g-cost (depth) for each visited state. This enables solution reconstruction by following parent links backwards from the final state. States revisited at equal or greater depth are pruned.
+4. **Bidirectional Search**: When enabled, alternates between forward and backward search based on nodes explored. The searchers detect overlap by checking if a state exists in the other searcher's transposition table. **Important limitation**: Not guaranteed to find optimal solutions because A* doesn't explore in BFS order.
 
-5. **Constants**:
+5. **Pruning Strategies**:
+   - `Pruning::None`: No pruning
+   - `Pruning::DeadSquares`: Prunes moves to positions where boxes can never reach any goal
+   - `Pruning::PiCorrals`: Advanced pruning using PI-corral detection (implies dead square pruning)
+
+6. **Dead Square Detection**: On initialization, `compute_dead_squares()` performs backward reachability analysis from goal positions to identify squares where boxes can never reach any goal. Separate analysis for push-dead squares (forward search) and pull-dead squares (backward search).
+
+7. **Zobrist Hashing**: Incremental hash updates are used during search. When a box moves, the hash is updated by XORing out the old position hash and XORing in the new position hash.
+
+8. **Transposition Table**: Stores parent state hash and g-cost (depth) for each visited state. This enables solution reconstruction by following parent links backwards from the final state. States revisited at equal or greater depth are pruned.
+
+9. **Constants**:
    - `MAX_SIZE = 64`: Maximum board dimension
    - `MAX_BOXES = 32`: Maximum number of boxes
    - Default node limit: 5 million states
