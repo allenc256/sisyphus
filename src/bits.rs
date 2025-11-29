@@ -126,12 +126,17 @@ impl Iterator for BitvectorIter {
     }
 }
 
+pub trait Bitboard {
+    fn get(&self, pos: Position) -> bool;
+    fn set(&mut self, pos: Position);
+}
+
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
-pub struct Bitboard {
+pub struct RawBitboard {
     data: [u64; 64],
 }
 
-impl Bitboard {
+impl RawBitboard {
     pub fn new() -> Self {
         Self { data: [0; 64] }
     }
@@ -146,8 +151,8 @@ impl Bitboard {
         self.data[pos.1 as usize] |= 1u64 << pos.0;
     }
 
-    pub fn invert(&self) -> Bitboard {
-        let mut result = Bitboard::new();
+    pub fn invert(&self) -> RawBitboard {
+        let mut result = RawBitboard::new();
         for i in 0..64 {
             result.data[i] = !self.data[i];
         }
@@ -155,7 +160,17 @@ impl Bitboard {
     }
 }
 
-impl fmt::Display for Bitboard {
+impl Bitboard for RawBitboard {
+    fn get(&self, pos: Position) -> bool {
+        RawBitboard::get(self, pos)
+    }
+
+    fn set(&mut self, pos: Position) {
+        RawBitboard::set(self, pos)
+    }
+}
+
+impl fmt::Display for RawBitboard {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         for line in self.data {
             writeln!(f, "{:064b}", line.reverse_bits())?
@@ -197,6 +212,16 @@ impl LazyBitboard {
         unsafe {
             *self.data[y].as_mut_ptr() |= 1u64 << pos.0;
         }
+    }
+}
+
+impl Bitboard for LazyBitboard {
+    fn get(&self, pos: Position) -> bool {
+        LazyBitboard::get(self, pos)
+    }
+
+    fn set(&mut self, pos: Position) {
+        LazyBitboard::set(self, pos)
     }
 }
 

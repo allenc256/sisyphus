@@ -1,4 +1,4 @@
-use crate::bits::{Bitboard, Bitvector, BitvectorIter, LazyBitboard};
+use crate::bits::{Bitboard, Bitvector, BitvectorIter, LazyBitboard, RawBitboard};
 pub use crate::bits::{Index, Position};
 use arrayvec::ArrayVec;
 use std::{fmt, marker::PhantomData};
@@ -339,8 +339,8 @@ pub struct Game {
     height: u8,
     boxes: Boxes,
     goal_positions: ArrayVec<Position, MAX_BOXES>,
-    push_dead_squares: Bitboard,
-    pull_dead_squares: Bitboard,
+    push_dead_squares: RawBitboard,
+    pull_dead_squares: RawBitboard,
 }
 
 impl Game {
@@ -448,8 +448,8 @@ impl Game {
             height: height as u8,
             boxes,
             goal_positions,
-            push_dead_squares: Bitboard::new(),
-            pull_dead_squares: Bitboard::new(),
+            push_dead_squares: RawBitboard::new(),
+            pull_dead_squares: RawBitboard::new(),
         };
         game.compute_dead_squares();
         Ok(game)
@@ -457,8 +457,8 @@ impl Game {
 
     /// Compute all dead squares where a box can never reach any goal.
     fn compute_dead_squares(&mut self) {
-        let mut push_reachable = Bitboard::new();
-        let mut pull_reachable = Bitboard::new();
+        let mut push_reachable = RawBitboard::new();
+        let mut pull_reachable = RawBitboard::new();
 
         // For each goal, find all squares that can reach it via reverse pushes
         for &goal_pos in &self.goal_positions {
@@ -470,70 +470,72 @@ impl Game {
         self.pull_dead_squares = pull_reachable.invert();
     }
 
-    /// DFS to find all squares from which a box could be pushed to reach the given position.
-    /// Uses reverse pushes (pulls).
-    fn dfs_push_reachable(&self, start_pos: Position, reachable: &mut Bitboard) {
-        if reachable.get(start_pos) {
-            return;
-        }
+    /// Generic DFS helper that explores positions starting from a given position.
+    /// The `should_visit` closure receives (from_pos, to_pos, direction) and
+    /// returns true if to_pos should be added to the stack and marked as visited.
+    fn dfs<B: Bitboard>(
+        &self,
+        start_pos: Position,
+        visited: &mut B,
+        mut should_visit: impl FnMut(Position, Position, Direction) -> bool,
+    ) {
+        assert!(
+            self.get_tile(start_pos) != Tile::Wall,
+            "start position cannot be a wall"
+        );
 
         let mut stack: ArrayVec<Position, { MAX_SIZE * MAX_SIZE }> = ArrayVec::new();
 
-        reachable.set(start_pos);
+        visited.set(start_pos);
         stack.push(start_pos);
 
-        while let Some(pos) = stack.pop() {
-            if self.get_tile(pos) == Tile::Wall {
-                continue;
-            }
-
+        while let Some(from_pos) = stack.pop() {
             for direction in ALL_DIRECTIONS {
-                if let Some(from_pos) = self.move_position(pos, direction.reverse()) {
-                    if let Some(player_pos) = self.move_position(from_pos, direction.reverse()) {
-                        if !reachable.get(from_pos)
-                            && self.get_tile(from_pos) != Tile::Wall
-                            && self.get_tile(player_pos) != Tile::Wall
-                        {
-                            reachable.set(from_pos);
-                            stack.push(from_pos);
-                        }
+                if let Some(to_pos) = self.move_position(from_pos, direction) {
+                    if self.get_tile(to_pos) != Tile::Wall
+                        && !visited.get(to_pos)
+                        && should_visit(from_pos, to_pos, direction)
+                    {
+                        visited.set(to_pos);
+                        stack.push(to_pos);
                     }
                 }
             }
         }
     }
 
-    /// DFS to find all squares from which a box could be pulled to reach the given position.
-    /// Uses forward pushes.
-    fn dfs_pull_reachable(&self, start_pos: Position, reachable: &mut Bitboard) {
+    /// DFS to find all squares from which a box could be pushed to reach the given position.
+    /// Uses reverse pushes (pulls).
+    fn dfs_push_reachable(&self, start_pos: Position, reachable: &mut RawBitboard) {
         if reachable.get(start_pos) {
             return;
         }
 
-        let mut stack: ArrayVec<Position, { MAX_SIZE * MAX_SIZE }> = ArrayVec::new();
-
-        reachable.set(start_pos);
-        stack.push(start_pos);
-
-        while let Some(pos) = stack.pop() {
-            if self.get_tile(pos) == Tile::Wall {
-                continue;
+        self.dfs(start_pos, reachable, |_from_pos, to_pos, direction| {
+            // Check that there is room for the player
+            if let Some(player_pos) = self.move_position(to_pos, direction) {
+                self.get_tile(player_pos) != Tile::Wall
+            } else {
+                false
             }
+        });
+    }
 
-            for direction in ALL_DIRECTIONS {
-                if let Some(to_pos) = self.move_position(pos, direction) {
-                    if let Some(player_pos) = self.move_position(pos, direction.reverse()) {
-                        if !reachable.get(to_pos)
-                            && self.get_tile(to_pos) != Tile::Wall
-                            && self.get_tile(player_pos) != Tile::Wall
-                        {
-                            reachable.set(to_pos);
-                            stack.push(to_pos);
-                        }
-                    }
-                }
-            }
+    /// DFS to find all squares from which a box could be pulled to reach the given position.
+    /// Uses forward pushes.
+    fn dfs_pull_reachable(&self, start_pos: Position, reachable: &mut RawBitboard) {
+        if reachable.get(start_pos) {
+            return;
         }
+
+        self.dfs(start_pos, reachable, |from_pos, _to_pos, direction| {
+            // Check that there is room for the player
+            if let Some(player_pos) = self.move_position(from_pos, direction.reverse()) {
+                self.get_tile(player_pos) != Tile::Wall
+            } else {
+                false
+            }
+        });
     }
 
     pub fn get_tile(&self, pos: Position) -> Tile {
@@ -697,8 +699,8 @@ impl Game {
             boxes,
             goal_positions: new_goal_positions,
             unsolved_boxes,
-            push_dead_squares: Bitboard::new(),
-            pull_dead_squares: Bitboard::new(),
+            push_dead_squares: RawBitboard::new(),
+            pull_dead_squares: RawBitboard::new(),
             ..self.clone()
         };
         game.compute_dead_squares();
@@ -951,37 +953,19 @@ impl Game {
     {
         let mut canonical_pos = start_player;
 
-        // Stack-allocated stack for DFS using ArrayVec
-        let mut stack: ArrayVec<Position, { MAX_SIZE * MAX_SIZE }> = ArrayVec::new();
-
-        // DFS from player position to find all reachable positions
-        stack.push(start_player);
-        visited.set(start_player);
-
-        while let Some(pos) = stack.pop() {
-            // Check all 4 directions
-            for &dir in &ALL_DIRECTIONS {
-                if let Some(next_pos) = self.move_position(pos, dir) {
-                    // If there's a box, notify the closure
-                    if let Some(box_idx) = self.box_index(next_pos) {
-                        on_box(pos, dir, box_idx);
-                    } else {
-                        let tile = self.get_tile(next_pos);
-                        if (tile == Tile::Floor || tile == Tile::Goal) && !visited.get(next_pos) {
-                            // Continue DFS to this floor/goal tile
-                            visited.set(next_pos);
-
-                            // Update canonical position if this is lexicographically smaller
-                            if next_pos < canonical_pos {
-                                canonical_pos = next_pos;
-                            }
-
-                            stack.push(next_pos);
-                        }
-                    }
+        self.dfs(start_player, visited, |from_pos, to_pos, direction| {
+            // If there's a box, notify the closure but don't visit
+            if let Some(box_idx) = self.box_index(to_pos) {
+                on_box(from_pos, direction, box_idx);
+                false
+            } else {
+                // Update canonical position if this is lexicographically smaller
+                if to_pos < canonical_pos {
+                    canonical_pos = to_pos;
                 }
+                true
             }
-        }
+        });
 
         canonical_pos
     }
