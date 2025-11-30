@@ -213,6 +213,42 @@ impl LazyBitboard {
             *self.data[y].as_mut_ptr() |= 1u64 << pos.0;
         }
     }
+
+    /// Returns the lexicographically smallest position that is set in the bitboard.
+    /// Returns None if no position is set.
+    pub fn top_left(&self) -> Option<Position> {
+        if self.initialized == 0 {
+            return None;
+        }
+        // Every initialized row must have at least one bit set (no unset operation exists)
+        let y = self.initialized.trailing_zeros() as u8;
+        let row_data = unsafe { *self.data[y as usize].as_ptr() };
+        let x = row_data.trailing_zeros() as u8;
+        Some(Position(x, y))
+    }
+
+    /// Logical OR all set bits from another LazyBitboard into this one.
+    pub fn set_all(&mut self, other: &LazyBitboard) {
+        let mut other_initialized = other.initialized;
+        while other_initialized != 0 {
+            let y = other_initialized.trailing_zeros() as usize;
+
+            // Ensure this row is initialized in self
+            if (self.initialized & (1u64 << y)) == 0 {
+                self.data[y].write(0);
+                self.initialized |= 1u64 << y;
+            }
+
+            // OR the bits together
+            unsafe {
+                let other_data = *other.data[y].as_ptr();
+                *self.data[y].as_mut_ptr() |= other_data;
+            }
+
+            // Clear this bit and continue to next row
+            other_initialized &= other_initialized - 1;
+        }
+    }
 }
 
 impl Bitboard for LazyBitboard {
@@ -340,5 +376,97 @@ mod tests {
 
         // Empty contains empty
         assert!(empty.contains_all(&empty));
+    }
+
+    #[test]
+    fn test_lazy_bitboard_top_left() {
+        // Test empty bitboard
+        let bb = LazyBitboard::new();
+        assert_eq!(bb.top_left(), None);
+
+        // Test single position
+        let mut bb = LazyBitboard::new();
+        bb.set(Position(5, 3));
+        assert_eq!(bb.top_left(), Some(Position(5, 3)));
+
+        // Test multiple positions - should return lexicographically smallest
+        let mut bb = LazyBitboard::new();
+        bb.set(Position(10, 5));
+        bb.set(Position(3, 7));
+        bb.set(Position(8, 2));
+        assert_eq!(bb.top_left(), Some(Position(8, 2)));
+
+        // Test multiple positions on same row
+        let mut bb = LazyBitboard::new();
+        bb.set(Position(15, 4));
+        bb.set(Position(3, 4));
+        bb.set(Position(20, 4));
+        assert_eq!(bb.top_left(), Some(Position(3, 4)));
+
+        // Test with position at (0, 0)
+        let mut bb = LazyBitboard::new();
+        bb.set(Position(0, 0));
+        bb.set(Position(10, 10));
+        assert_eq!(bb.top_left(), Some(Position(0, 0)));
+    }
+
+    #[test]
+    fn test_lazy_bitboard_set_all() {
+        // Test merging two bitboards
+        let mut bb1 = LazyBitboard::new();
+        bb1.set(Position(1, 0));
+        bb1.set(Position(5, 3));
+
+        let mut bb2 = LazyBitboard::new();
+        bb2.set(Position(3, 0));
+        bb2.set(Position(7, 4));
+
+        bb1.set_all(&bb2);
+
+        // bb1 should now have all bits from both
+        assert!(bb1.get(Position(1, 0)));
+        assert!(bb1.get(Position(3, 0)));
+        assert!(bb1.get(Position(5, 3)));
+        assert!(bb1.get(Position(7, 4)));
+
+        // bb2 should be unchanged
+        assert!(bb2.get(Position(3, 0)));
+        assert!(bb2.get(Position(7, 4)));
+        assert!(!bb2.get(Position(1, 0)));
+        assert!(!bb2.get(Position(5, 3)));
+    }
+
+    #[test]
+    fn test_lazy_bitboard_set_all_overlapping() {
+        // Test merging with overlapping bits
+        let mut bb1 = LazyBitboard::new();
+        bb1.set(Position(1, 2));
+        bb1.set(Position(3, 2));
+
+        let mut bb2 = LazyBitboard::new();
+        bb2.set(Position(1, 2)); // Same as bb1
+        bb2.set(Position(5, 2));
+
+        bb1.set_all(&bb2);
+
+        // Should have union of all bits
+        assert!(bb1.get(Position(1, 2)));
+        assert!(bb1.get(Position(3, 2)));
+        assert!(bb1.get(Position(5, 2)));
+    }
+
+    #[test]
+    fn test_lazy_bitboard_set_all_empty() {
+        // Test merging with empty bitboard
+        let mut bb1 = LazyBitboard::new();
+        bb1.set(Position(5, 5));
+
+        let bb2 = LazyBitboard::new();
+
+        bb1.set_all(&bb2);
+
+        // bb1 should be unchanged
+        assert!(bb1.get(Position(5, 5)));
+        assert_eq!(bb1.top_left(), Some(Position(5, 5)));
     }
 }

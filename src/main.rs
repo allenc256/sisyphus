@@ -1,4 +1,5 @@
 mod bits;
+mod corral;
 mod deadlocks;
 mod game;
 mod heuristic;

@@ -1,6 +1,7 @@
 use crate::bits::{Bitvector, Index};
+use crate::corral::find_pi_corral;
 use crate::deadlocks::{compute_frozen_boxes, compute_new_frozen_boxes};
-use crate::game::{Direction, Game, Move, Moves, Position, Pruning, Pull, Push};
+use crate::game::{Direction, Game, Move, Moves, Position, Pruning, Pull, Push, ReachableSet};
 use crate::heuristic::{Cost, Heuristic};
 use crate::zobrist::Zobrist;
 use std::collections::HashMap;
@@ -59,10 +60,20 @@ struct Searcher<H: Heuristic, S: SearchHelper> {
 trait SearchHelper {
     type Move: Move;
 
-    fn compute_moves(&self, game: &Game) -> (Moves<Self::Move>, Position);
+    fn compute_moves(&self, game: &Game) -> ReachableSet<Self::Move>;
     fn compute_unmoves(&self, game: &Game) -> Moves<Self::Move>;
+
     fn apply_move(&self, game: &mut Game, move_: &Self::Move);
-    fn unapply_move(&self, game: &mut Game, move_: &Self::Move);
+    fn apply_unmove(&self, game: &mut Game, move_: &Self::Move);
+
+    fn is_dead_square(&self, game: &Game, pos: Position) -> bool;
+
+    fn find_pi_corral(
+        &self,
+        game: &Game,
+        reachable: &ReachableSet<Self::Move>,
+    ) -> Option<Moves<Self::Move>>;
+
     fn compute_new_frozen_boxes(
         &self,
         frozen: &Bitvector,
@@ -243,10 +254,13 @@ impl<H: Heuristic, S: SearchHelper> Searcher<H, S> {
         }
 
         // Get all valid pushes and canonical position
-        let (moves, canonical_pos) = self.helper.compute_moves(game);
+        let reachable = self.helper.compute_moves(game);
 
         // Hash in the canonical player position
-        let curr_hash = boxes_hash ^ self.zobrist.player_hash(canonical_pos);
+        let curr_hash = boxes_hash
+            ^ self
+                .zobrist
+                .player_hash(reachable.squares.top_left().unwrap());
 
         // Check transposition table
         if let Some(entry) = self.table.get(&curr_hash) {
@@ -275,13 +289,26 @@ impl<H: Heuristic, S: SearchHelper> Searcher<H, S> {
             return SearchResult::Cutoff;
         }
 
+        // Apply PI-corral pruning
+        let moves = if let Some(pi_corral_moves) = self.helper.find_pi_corral(game, &reachable) {
+            pi_corral_moves
+        } else {
+            reachable.moves
+        };
+
         let mut result = SearchResult::Impossible;
 
-        // Try each push
+        // Try each move
         for move_ in &moves {
             let old_box_pos = game.box_position(move_.box_index());
+            let new_box_pos = game.move_position(old_box_pos, move_.direction()).unwrap();
+
+            // Apply dead square pruning
+            if self.helper.is_dead_square(game, new_box_pos) {
+                continue;
+            }
+
             self.helper.apply_move(game, &move_);
-            let new_box_pos = game.box_position(move_.box_index());
 
             // Compute frozen boxes
             let new_frozen =
@@ -289,7 +316,7 @@ impl<H: Heuristic, S: SearchHelper> Searcher<H, S> {
                     .compute_new_frozen_boxes(frozen_boxes, game, move_.box_index());
             if game.unsolved_boxes().contains_any(&new_frozen) {
                 // Deadlock
-                self.helper.unapply_move(game, &move_);
+                self.helper.apply_unmove(game, &move_);
                 continue;
             }
 
@@ -321,7 +348,7 @@ impl<H: Heuristic, S: SearchHelper> Searcher<H, S> {
 
             frozen_boxes.remove_all(&new_frozen);
 
-            self.helper.unapply_move(game, &move_);
+            self.helper.apply_unmove(game, &move_);
 
             if child_result == SearchResult::Cutoff {
                 return child_result;
@@ -360,7 +387,7 @@ impl<H: Heuristic, S: SearchHelper> Searcher<H, S> {
             let mut found = false;
             for unmove in &unmoves {
                 let old_box_pos = current_game.box_position(unmove.box_index());
-                self.helper.unapply_move(&mut current_game, &unmove);
+                self.helper.apply_unmove(&mut current_game, &unmove);
                 let new_box_pos = current_game.box_position(unmove.box_index());
 
                 // Compute hash of this previous state
@@ -401,20 +428,40 @@ impl<H: Heuristic, S: SearchHelper> Searcher<H, S> {
 impl SearchHelper for ForwardsSearchHelper {
     type Move = Push;
 
-    fn compute_moves(&self, game: &Game) -> (Moves<Push>, Position) {
-        game.compute_pushes(self.pruning)
+    fn compute_moves(&self, game: &Game) -> ReachableSet<Push> {
+        game.compute_pushes()
     }
 
     fn compute_unmoves(&self, game: &Game) -> Moves<Push> {
-        game.compute_pulls(Pruning::None).0.to_pushes()
+        game.compute_pulls().moves.to_pushes()
     }
 
     fn apply_move(&self, game: &mut Game, push: &Push) {
         game.push(*push);
     }
 
-    fn unapply_move(&self, game: &mut Game, push: &Push) {
+    fn apply_unmove(&self, game: &mut Game, push: &Push) {
         game.pull(push.to_pull());
+    }
+
+    fn is_dead_square(&self, game: &Game, pos: Position) -> bool {
+        if self.pruning != Pruning::None {
+            game.is_push_dead_square(pos)
+        } else {
+            false
+        }
+    }
+
+    fn find_pi_corral(
+        &self,
+        game: &Game,
+        reachable: &ReachableSet<Self::Move>,
+    ) -> Option<Moves<Self::Move>> {
+        if self.pruning == Pruning::PiCorrals {
+            find_pi_corral(game, reachable)
+        } else {
+            None
+        }
     }
 
     fn compute_new_frozen_boxes(
@@ -430,20 +477,36 @@ impl SearchHelper for ForwardsSearchHelper {
 impl SearchHelper for BackwardsSearchHelper {
     type Move = Pull;
 
-    fn compute_moves(&self, game: &Game) -> (Moves<Pull>, Position) {
-        game.compute_pulls(self.pruning)
+    fn compute_moves(&self, game: &Game) -> ReachableSet<Pull> {
+        game.compute_pulls()
     }
 
     fn compute_unmoves(&self, game: &Game) -> Moves<Pull> {
-        game.compute_pushes(Pruning::None).0.to_pulls()
+        game.compute_pushes().moves.to_pulls()
     }
 
     fn apply_move(&self, game: &mut Game, pull: &Pull) {
         game.pull(*pull);
     }
 
-    fn unapply_move(&self, game: &mut Game, pull: &Pull) {
+    fn apply_unmove(&self, game: &mut Game, pull: &Pull) {
         game.push(pull.to_push())
+    }
+
+    fn is_dead_square(&self, game: &Game, pos: Position) -> bool {
+        if self.pruning != Pruning::None {
+            game.is_pull_dead_square(pos)
+        } else {
+            false
+        }
+    }
+
+    fn find_pi_corral(
+        &self,
+        _game: &Game,
+        _reachable: &ReachableSet<Self::Move>,
+    ) -> Option<Moves<Self::Move>> {
+        None
     }
 
     fn compute_new_frozen_boxes(
@@ -572,7 +635,7 @@ impl<H: Heuristic> Solver<H> {
             });
 
             // Compute valid pushes at this state
-            let (valid_pushes, _canonical_pos) = test_game.compute_pushes(Pruning::None);
+            let valid_pushes = test_game.compute_pushes().moves;
 
             // Verify that this push is among the valid pushes
             let push = Push::new(box_index, push_by_pos.direction);
