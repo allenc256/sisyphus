@@ -5,6 +5,14 @@ use crate::{
     game::{ALL_DIRECTIONS, Game, MAX_SIZE, Move, Moves, Push, ReachableSet, Tile},
 };
 
+struct Corral {
+    /// The set of boxes comprising the edge of the corral.
+    edge: Bitvector,
+    /// The extent of the corral. This includes all boxes within the corral,
+    /// including its edge.
+    extent: LazyBitboard,
+}
+
 pub fn find_pi_corral(game: &Game, reachable: &ReachableSet<Push>) -> Option<Moves<Push>> {
     let mut visited = LazyBitboard::new();
     let mut result = None;
@@ -14,20 +22,23 @@ pub fn find_pi_corral(game: &Game, reachable: &ReachableSet<Push>) -> Option<Mov
         let box_pos = game.box_position(push.box_index());
         let new_pos = game.move_position(box_pos, push.direction()).unwrap();
 
-        // Examine the other side of the push for a PI-corral. Note that we only
-        // need to consider corrals that are the other side of a valid player
-        // push (any corral NOT on the other side of a player push full the "P"
-        // condition of a PI-corral).
+        // Look for a corral by examining the other side of a push.
+        // Note: we ignore corrals that are not on the other side of a valid
+        // player push, since these cannot possibly fulfill the PI conditions
+        // necessary for pruning.
         if !reachable.squares.get(new_pos) && !visited.get(new_pos) {
-            if let Some((new_pushes, new_cost)) =
-                find_pi_corral_helper(game, new_pos, reachable, &mut visited)
-            {
-                // If we've found a PI-corral, check if this is is the
-                // lowest "cost" PI-corral we've found so far. If it is, set
-                // the player pushes to this PI-corral's pushes.
-                if new_cost < min_cost {
-                    result = Some(new_pushes);
-                    min_cost = new_cost;
+            if let Some(corral) = find_corral(game, new_pos, reachable) {
+                visited.set_all(&corral.extent);
+
+                // We found a corral: now check the PI conditions to see if
+                // eligible for pruning
+                if let Some(pushes) = check_pi_corral_conditions(game, reachable, &corral) {
+                    // Keep only the "min cost" corral
+                    let cost = pushes.len();
+                    if cost < min_cost {
+                        result = Some(pushes);
+                        min_cost = cost;
+                    }
                 }
             }
         }
@@ -36,24 +47,17 @@ pub fn find_pi_corral(game: &Game, reachable: &ReachableSet<Push>) -> Option<Mov
     result
 }
 
-fn find_pi_corral_helper(
-    game: &Game,
-    pos: Position,
-    reachable: &ReachableSet<Push>,
-    visited: &mut LazyBitboard,
-) -> Option<(Moves<Push>, usize)> {
+fn find_corral(game: &Game, pos: Position, reachable: &ReachableSet<Push>) -> Option<Corral> {
     assert!(!reachable.squares.get(pos));
 
     let mut stack: ArrayVec<Position, { MAX_SIZE * MAX_SIZE }> = ArrayVec::new();
-    let mut locally_visited = LazyBitboard::new();
+    let mut extent = LazyBitboard::new();
     let mut edge = Bitvector::new();
-    let mut pushes = Moves::new();
-    let mut must_be_pushed = false;
+    let mut requires_push = false;
 
     // Start DFS from the given position
     stack.push(pos);
-    locally_visited.set(pos);
-    visited.set(pos);
+    extent.set(pos);
 
     // Perform DFS to find full extent of corral
     while let Some(curr_pos) = stack.pop() {
@@ -63,7 +67,7 @@ fn find_pi_corral_helper(
         if let Some(box_idx) = game.box_index(curr_pos) {
             // Box not on goal: corral requires pushes to solve the puzzle
             if !is_goal {
-                must_be_pushed = true;
+                requires_push = true;
             }
             // If we've hit the edge of the corral, stop exploring further
             if reachable.boxes.contains(box_idx) {
@@ -72,27 +76,36 @@ fn find_pi_corral_helper(
             }
         } else if is_goal {
             // Goal without a box: corral requires pushes to solve the puzzle
-            must_be_pushed = true;
+            requires_push = true;
         }
 
         // Otherwise, continue searching in all directions
         for &dir in &ALL_DIRECTIONS {
             if let Some(next_pos) = game.move_position(curr_pos, dir) {
-                if game.get_tile(next_pos) != Tile::Wall && !locally_visited.get(next_pos) {
+                if game.get_tile(next_pos) != Tile::Wall && !extent.get(next_pos) {
                     stack.push(next_pos);
-                    locally_visited.set(next_pos);
-                    visited.set(next_pos);
+                    extent.set(next_pos);
                 }
             }
         }
     }
 
-    if !must_be_pushed {
-        return None;
+    if requires_push {
+        Some(Corral { edge, extent })
+    } else {
+        None
     }
+}
+
+fn check_pi_corral_conditions(
+    game: &Game,
+    reachable: &ReachableSet<Push>,
+    corral: &Corral,
+) -> Option<Moves<Push>> {
+    let mut pushes = Moves::new();
 
     // Check the PI conditions over the edge boxes
-    for box_idx in edge.iter() {
+    for box_idx in corral.edge.iter() {
         let box_pos = game.box_position(box_idx);
         for &dir in &ALL_DIRECTIONS {
             if let (Some(next_pos), Some(player_pos)) = (
@@ -100,7 +113,7 @@ fn find_pi_corral_helper(
                 game.move_position(box_pos, dir.reverse()),
             ) {
                 // Ignore pushes originating from within the corral
-                if locally_visited.get(player_pos) {
+                if corral.extent.get(player_pos) {
                     continue;
                 }
                 // Ignore pushes into a wall or box
@@ -116,7 +129,7 @@ fn find_pi_corral_helper(
                     continue;
                 }
                 // Check I condition: the push must lead into the corral
-                if !locally_visited.get(next_pos) {
+                if !corral.extent.get(next_pos) {
                     return None;
                 }
                 // Check P condition: the player must be capable of making the push
@@ -129,8 +142,7 @@ fn find_pi_corral_helper(
         }
     }
 
-    let cost = pushes.len();
-    Some((pushes, cost))
+    Some(pushes)
 }
 
 #[cfg(test)]
@@ -173,9 +185,8 @@ mod tests {
         let mut expected_moves = Moves::new();
         expected_moves.add(Index(0), Direction::Left);
         expected_moves.add(Index(1), Direction::Left);
-        let expected_size = 2;
 
-        check_pi_corral(&game, 3, 2, Some((expected_moves, expected_size)));
+        check_pi_corral(&game, 3, 2, Some(expected_moves));
     }
 
     #[test]
@@ -196,9 +207,8 @@ mod tests {
         expected_moves.add(Index(1), Direction::Left);
         expected_moves.add(Index(2), Direction::Left);
         expected_moves.add(Index(4), Direction::Left);
-        let expected_size = 3;
 
-        check_pi_corral(&game, 3, 2, Some((expected_moves, expected_size)));
+        check_pi_corral(&game, 3, 2, Some(expected_moves));
     }
 
     #[test]
@@ -235,9 +245,8 @@ mod tests {
         let mut expected_moves = Moves::new();
         expected_moves.add(Index(0), Direction::Left);
         expected_moves.add(Index(1), Direction::Left);
-        let expected_size = 2;
 
-        check_pi_corral(&game, 2, 2, Some((expected_moves, expected_size)));
+        check_pi_corral(&game, 2, 2, Some(expected_moves));
     }
 
     #[test]
@@ -256,9 +265,8 @@ mod tests {
 
         let mut expected_moves = Moves::new();
         expected_moves.add(Index(0), Direction::Left);
-        let expected_size = 1;
 
-        check_pi_corral(&game, 3, 2, Some((expected_moves, expected_size)));
+        check_pi_corral(&game, 3, 2, Some(expected_moves));
         check_pi_corral(&game, 5, 4, None);
     }
 
@@ -282,15 +290,13 @@ mod tests {
         let mut corral1_moves = Moves::new();
         corral1_moves.add(Index(8), Direction::Right);
         corral1_moves.add(Index(10), Direction::Right);
-        let corral1_size = 2;
 
         let mut corral2_moves = Moves::new();
         corral2_moves.add(Index(9), Direction::Left);
-        let corral2_size = 1;
 
         check_pi_corral(&game, 13, 5, None);
-        check_pi_corral(&game, 14, 7, Some((corral1_moves, corral1_size)));
-        check_pi_corral(&game, 8, 7, Some((corral2_moves, corral2_size)));
+        check_pi_corral(&game, 14, 7, Some(corral1_moves));
+        check_pi_corral(&game, 8, 7, Some(corral2_moves));
     }
 
     #[test]
@@ -316,10 +322,11 @@ mod tests {
         Game::from_text(text.trim_matches('\n')).unwrap()
     }
 
-    fn check_pi_corral(game: &Game, x: u8, y: u8, expected_result: Option<(Moves<Push>, usize)>) {
-        let mut visited = LazyBitboard::new();
+    fn check_pi_corral(game: &Game, x: u8, y: u8, expected_result: Option<Moves<Push>>) {
         let reachable = game.compute_pushes();
-        let result = find_pi_corral_helper(game, Position(x, y), &reachable, &mut visited);
+        let pos = Position(x, y);
+        let corral = find_corral(game, pos, &reachable).unwrap();
+        let result = check_pi_corral_conditions(game, &reachable, &corral);
         assert_eq!(result, expected_result);
     }
 }

@@ -314,8 +314,9 @@ impl<H: Heuristic, S: SearchHelper> Searcher<H, S> {
             let new_frozen =
                 self.helper
                     .compute_new_frozen_boxes(frozen_boxes, game, move_.box_index());
+
+            // Apply frozen box deadlock pruning
             if game.unsolved_boxes().contains_any(&new_frozen) {
-                // Deadlock
                 self.helper.apply_unmove(game, &move_);
                 continue;
             }
