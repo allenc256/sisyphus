@@ -357,6 +357,19 @@ impl Boxes {
     fn has_box_at(&self, pos: Position) -> bool {
         self.index[pos.1 as usize][pos.0 as usize] != NO_BOX
     }
+
+    fn clear(&mut self) {
+        for pos in self.positions.iter() {
+            self.index[pos.1 as usize][pos.1 as usize] = NO_BOX;
+        }
+        self.positions.clear();
+        self.unsolved = Bitvector::new();
+    }
+}
+
+pub struct Checkpoint {
+    player: Position,
+    boxes: ArrayVec<Position, MAX_BOXES>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -808,6 +821,21 @@ impl Game {
                 true
             }
         });
+    }
+
+    pub fn checkpoint(&self) -> Checkpoint {
+        Checkpoint {
+            player: self.player,
+            boxes: self.boxes.positions.clone(),
+        }
+    }
+
+    pub fn restore(&mut self, checkpoint: &Checkpoint) {
+        self.player = checkpoint.player;
+        self.boxes.clear();
+        for &pos in checkpoint.boxes.iter() {
+            self.boxes.add(pos, self.get_tile(pos) == Tile::Goal);
+        }
     }
 }
 
