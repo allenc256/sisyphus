@@ -16,7 +16,7 @@ use std::ops::Range;
 use std::time::Instant;
 
 use crate::{
-    game::{Move, Pruning, Push},
+    game::{Move, Push},
     heuristic::GreedyHeuristic,
 };
 
@@ -32,23 +32,6 @@ enum Direction {
     Forward,
     Reverse,
     Bidirectional,
-}
-
-#[derive(Debug, Clone, Copy, ValueEnum)]
-enum PruningArg {
-    None,
-    DeadSquares,
-    PiCorrals,
-}
-
-impl From<PruningArg> for Pruning {
-    fn from(arg: PruningArg) -> Self {
-        match arg {
-            PruningArg::None => Pruning::None,
-            PruningArg::DeadSquares => Pruning::DeadSquares,
-            PruningArg::PiCorrals => Pruning::PiCorrals,
-        }
-    }
 }
 
 impl From<Direction> for SearchType {
@@ -95,7 +78,9 @@ struct SolveOpts {
     search_type: SearchType,
     print_solution: bool,
     freeze_deadlocks: bool,
-    pruning: Pruning,
+    dead_squares: bool,
+    pi_corrals: bool,
+    deadlock_max_nodes: usize,
     trace_range: Range<usize>,
 }
 
@@ -105,7 +90,9 @@ fn solve_level_helper<H: Heuristic>(game: &Game, opts: SolveOpts) -> LevelStats 
         opts.search_type,
         game.clone(),
         opts.freeze_deadlocks,
-        opts.pruning,
+        opts.dead_squares,
+        opts.pi_corrals,
+        opts.deadlock_max_nodes,
         opts.trace_range,
     );
     let start = Instant::now();
@@ -207,7 +194,7 @@ struct Args {
 
     /// Maximum number of nodes to explore before giving up
     #[arg(short = 'n', long, default_value = "5000000")]
-    max_nodes_explored: usize,
+    max_nodes: usize,
 
     /// Heuristic to use for solving
     #[arg(short = 'H', long, value_enum, default_value = "greedy")]
@@ -221,9 +208,17 @@ struct Args {
     #[arg(long, default_value = "false")]
     no_freeze_deadlocks: bool,
 
-    /// Pruning strategy (none, dead-squares, pi-corrals)
-    #[arg(long, value_enum, default_value = "pi-corrals")]
-    pruning: PruningArg,
+    /// Disable dead square pruning
+    #[arg(long, default_value = "false")]
+    no_dead_squares: bool,
+
+    /// Disable PI-corral pruning
+    #[arg(long, default_value = "false")]
+    no_pi_corrals: bool,
+
+    /// Maximum nodes to explore when searching for corral deadlocks
+    #[arg(long, default_value = "0")]
+    deadlock_max_nodes: usize,
 
     /// Range of node counts to trace (e.g., "100..200", "100..=200", or "100")
     #[arg(long, value_parser = parse_trace_range)]
@@ -284,11 +279,13 @@ fn main() {
         let game = levels.get(level_num - 1).unwrap();
         let opts = SolveOpts {
             level_num,
-            max_nodes_explored: args.max_nodes_explored,
+            max_nodes_explored: args.max_nodes,
             search_type: args.direction.into(),
             print_solution: args.print_solution,
             freeze_deadlocks: !args.no_freeze_deadlocks,
-            pruning: args.pruning.into(),
+            dead_squares: !args.no_dead_squares,
+            pi_corrals: !args.no_pi_corrals,
+            deadlock_max_nodes: args.deadlock_max_nodes,
             trace_range: trace_range.clone(),
         };
         let stats = solve_level(game, opts, args.heuristic);

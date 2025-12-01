@@ -1,7 +1,7 @@
 use crate::bits::{Bitvector, Index};
-use crate::corral::find_pi_corral;
+use crate::corral::{CorralResult, CorralSearcher};
 use crate::frozen::{compute_frozen_boxes, compute_new_frozen_boxes};
-use crate::game::{Direction, Game, Move, Moves, Position, Pruning, Pull, Push, ReachableSet};
+use crate::game::{Direction, Game, Move, Moves, Position, Pull, Push, ReachableSet};
 use crate::heuristic::{Cost, Heuristic};
 use crate::zobrist::Zobrist;
 use std::collections::HashMap;
@@ -68,11 +68,11 @@ trait SearchHelper {
 
     fn is_dead_square(&self, game: &Game, pos: Position) -> bool;
 
-    fn find_pi_corral(
-        &self,
-        game: &Game,
+    fn search_corrals(
+        &mut self,
+        game: &mut Game,
         reachable: &ReachableSet<Self::Move>,
-    ) -> Option<Moves<Self::Move>>;
+    ) -> CorralResult<Self::Move>;
 
     fn compute_new_frozen_boxes(
         &self,
@@ -83,11 +83,13 @@ trait SearchHelper {
 }
 
 struct ForwardsSearchHelper {
-    pruning: Pruning,
+    corral_searcher: CorralSearcher,
+    dead_squares: bool,
+    pi_corrals: bool,
 }
 
 struct BackwardsSearchHelper {
-    pruning: Pruning,
+    dead_squares: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -290,10 +292,10 @@ impl<H: Heuristic, S: SearchHelper> Searcher<H, S> {
         }
 
         // Apply PI-corral pruning
-        let moves = if let Some(pi_corral_moves) = self.helper.find_pi_corral(game, &reachable) {
-            pi_corral_moves
-        } else {
-            reachable.moves
+        let moves = match self.helper.search_corrals(game, &reachable) {
+            CorralResult::Prune(pruned_moves) => pruned_moves,
+            CorralResult::None => reachable.moves,
+            CorralResult::Deadlocked => return SearchResult::Impossible,
         };
 
         let mut result = SearchResult::Impossible;
@@ -446,22 +448,22 @@ impl SearchHelper for ForwardsSearchHelper {
     }
 
     fn is_dead_square(&self, game: &Game, pos: Position) -> bool {
-        if self.pruning != Pruning::None {
+        if self.dead_squares {
             game.is_push_dead_square(pos)
         } else {
             false
         }
     }
 
-    fn find_pi_corral(
-        &self,
-        game: &Game,
+    fn search_corrals(
+        &mut self,
+        game: &mut Game,
         reachable: &ReachableSet<Self::Move>,
-    ) -> Option<Moves<Self::Move>> {
-        if self.pruning == Pruning::PiCorrals {
-            find_pi_corral(game, reachable)
+    ) -> CorralResult<Self::Move> {
+        if self.pi_corrals {
+            self.corral_searcher.search(game, reachable)
         } else {
-            None
+            CorralResult::None
         }
     }
 
@@ -495,19 +497,19 @@ impl SearchHelper for BackwardsSearchHelper {
     }
 
     fn is_dead_square(&self, game: &Game, pos: Position) -> bool {
-        if self.pruning != Pruning::None {
+        if self.dead_squares {
             game.is_pull_dead_square(pos)
         } else {
             false
         }
     }
 
-    fn find_pi_corral(
-        &self,
-        _game: &Game,
+    fn search_corrals(
+        &mut self,
+        _game: &mut Game,
         _reachable: &ReachableSet<Self::Move>,
-    ) -> Option<Moves<Self::Move>> {
-        None
+    ) -> CorralResult<Self::Move> {
+        CorralResult::None
     }
 
     fn compute_new_frozen_boxes(
@@ -526,7 +528,9 @@ impl<H: Heuristic> Solver<H> {
         search_type: SearchType,
         game: Game,
         freeze_deadlocks: bool,
-        pruning: Pruning,
+        dead_squares: bool,
+        pi_corrals: bool,
+        deadlock_max_nodes: usize,
         trace_range: Range<usize>,
     ) -> Self {
         let zobrist = Rc::new(Zobrist::new());
@@ -546,7 +550,11 @@ impl<H: Heuristic> Solver<H> {
                 forward_player_positions,
                 freeze_deadlocks,
                 trace_range.clone(),
-                ForwardsSearchHelper { pruning },
+                ForwardsSearchHelper {
+                    dead_squares,
+                    pi_corrals,
+                    corral_searcher: CorralSearcher::new(zobrist.clone(), deadlock_max_nodes),
+                },
             ),
             reverse: Searcher::new(
                 zobrist,
@@ -556,7 +564,7 @@ impl<H: Heuristic> Solver<H> {
                 reverse_player_positions,
                 false,
                 trace_range,
-                BackwardsSearchHelper { pruning },
+                BackwardsSearchHelper { dead_squares },
             ),
             search_type,
         }
@@ -696,10 +704,13 @@ mod tests {
 
     #[test]
     fn test_solve_already_solved() {
-        let input = "####\n\
-                     #@*#\n\
-                     ####";
-        let game = Game::from_text(input).unwrap();
+        let game = parse_game(
+            r#"
+####
+#@*#
+####
+"#,
+        );
         let mut solver = new_solver(game);
         let result = solver.solve();
 
@@ -711,11 +722,14 @@ mod tests {
 
     #[test]
     fn test_solve_two_moves() {
-        let input = "#####\n\
-                     #@$ .#\n\
-                     #####";
-        let game = Game::from_text(input).unwrap();
-        let mut solver = new_solver(game);
+        let game = parse_game(
+            r#"
+######
+#@$ .#
+######
+"#,
+        );
+        let mut solver = new_solver(game.clone());
         let result = solver.solve();
 
         assert!(matches!(result, SolveResult::Solved(_)));
@@ -723,7 +737,7 @@ mod tests {
             assert_eq!(soln.len(), 2);
 
             // Verify solution works
-            let mut test_game = Game::from_text(input).unwrap();
+            let mut test_game = game.clone();
             for push in soln {
                 test_game.push(push);
             }
@@ -755,7 +769,9 @@ mod tests {
             SearchType::Forward,
             game,
             true,
-            Pruning::PiCorrals,
+            true, // dead_squares
+            true, // pi_corrals
+            100,  // deadlock_max_nodes
             0..0,
         )
     }

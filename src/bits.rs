@@ -126,6 +126,24 @@ impl Iterator for BitvectorIter {
     }
 }
 
+impl IntoIterator for Bitvector {
+    type Item = Index;
+    type IntoIter = BitvectorIter;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.iter()
+    }
+}
+
+impl<'a> IntoIterator for &'a Bitvector {
+    type Item = Index;
+    type IntoIter = BitvectorIter;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.iter()
+    }
+}
+
 pub trait Bitboard {
     fn get(&self, pos: Position) -> bool;
     fn set(&mut self, pos: Position);
