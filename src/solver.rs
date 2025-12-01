@@ -1,6 +1,6 @@
 use crate::bits::{Bitvector, Index};
 use crate::corral::find_pi_corral;
-use crate::deadlocks::{compute_frozen_boxes, compute_new_frozen_boxes};
+use crate::frozen::{compute_frozen_boxes, compute_new_frozen_boxes};
 use crate::game::{Direction, Game, Move, Moves, Position, Pruning, Pull, Push, ReachableSet};
 use crate::heuristic::{Cost, Heuristic};
 use crate::zobrist::Zobrist;

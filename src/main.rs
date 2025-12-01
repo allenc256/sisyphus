@@ -1,6 +1,6 @@
 mod bits;
 mod corral;
-mod deadlocks;
+mod frozen;
 mod game;
 mod heuristic;
 mod levels;
