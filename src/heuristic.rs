@@ -162,6 +162,7 @@ fn compute_greedy_heuristic(
     let mut all_pairs: ArrayVec<(u16, Index, Index), M> = ArrayVec::new();
     for (box_idx, &pos) in game.box_positions().iter().enumerate() {
         let box_idx = Index(box_idx as u8);
+        #[allow(clippy::needless_range_loop)]
         for dst_idx in 0..box_count {
             let distance = distances[dst_idx][pos.1 as usize][pos.0 as usize];
             if distance < u16::MAX {
@@ -256,6 +257,7 @@ fn compute_hungarian_heuristic(
     let mut cost_matrix = ArrayMatrix::<u16, { MAX_BOXES * MAX_BOXES }>::new(box_count, box_count);
 
     for &box_pos in game.box_positions().iter() {
+        #[allow(clippy::needless_range_loop)]
         for goal_idx in 0..box_count {
             let distance = distances[goal_idx][box_pos.1 as usize][box_pos.0 as usize];
             cost_matrix.push(distance);

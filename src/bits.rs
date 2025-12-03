@@ -135,7 +135,7 @@ impl IntoIterator for Bitvector {
     }
 }
 
-impl<'a> IntoIterator for &'a Bitvector {
+impl IntoIterator for &Bitvector {
     type Item = Index;
     type IntoIter = BitvectorIter;
 

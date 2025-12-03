@@ -530,6 +530,7 @@ impl SearchHelper for BackwardsSearchHelper {
 }
 
 impl<H: Heuristic> Solver<H> {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         max_nodes_explored: usize,
         search_type: SearchType,

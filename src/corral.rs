@@ -159,7 +159,7 @@ impl CorralSearcher {
                         if corral.p_condition {
                             let cost = corral.pushes.len();
                             if cost < min_cost {
-                                result = CorralResult::Prune(corral.pushes.clone());
+                                result = CorralResult::Prune(corral.pushes);
                                 min_cost = cost;
                             }
                         }
@@ -220,7 +220,7 @@ impl DeadlockSearcher {
 
         // Perform the search
         let mut nodes_explored = 0;
-        let partial_hash = self.zobrist.compute_boxes_hash(&game);
+        let partial_hash = self.zobrist.compute_boxes_hash(game);
         let result = self.search_helper(game, corral, 0, &mut nodes_explored, partial_hash);
 
         // Undo projection
@@ -646,7 +646,7 @@ mod tests {
         let reachable = game.compute_pushes();
         let box_pos = game.move_position(game.player(), direction).unwrap();
         let corral_pos = game.move_position(box_pos, direction).unwrap();
-        let corral = compute_corral(&game, corral_pos, &reachable).unwrap();
+        let corral = compute_corral(game, corral_pos, &reachable).unwrap();
         let zobrist = Rc::new(Zobrist::new());
         let mut searcher = DeadlockSearcher::new(zobrist, 100);
         let result = searcher.search(game, &corral);
