@@ -353,13 +353,14 @@ impl Boxes {
 
     fn clear(&mut self) {
         for pos in &self.positions {
-            self.index[pos.1 as usize][pos.1 as usize] = NO_BOX;
+            self.index[pos.1 as usize][pos.0 as usize] = NO_BOX;
         }
         self.positions.clear();
         self.unsolved = Bitvector::new();
     }
 }
 
+#[derive(Debug, Clone)]
 pub struct Checkpoint {
     player: Position,
     boxes: ArrayVec<Position, MAX_BOXES>,

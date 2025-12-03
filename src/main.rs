@@ -5,6 +5,7 @@ mod game;
 mod heuristic;
 mod hungarian;
 mod levels;
+mod pqueue;
 mod solver;
 mod zobrist;
 
@@ -19,6 +20,7 @@ use std::time::Instant;
 use crate::{
     game::{Move, Push},
     heuristic::{GreedyHeuristic, HungarianHeuristic},
+    solver::SolverOpts,
 };
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
@@ -74,46 +76,28 @@ struct LevelStats {
     elapsed_ms: u128,
 }
 
-struct SolveOpts {
+fn solve_level_helper<H: Heuristic>(
+    game: &Game,
     level_num: usize,
-    max_nodes_explored: usize,
-    search_type: SearchType,
+    opts: SolverOpts,
     print_solution: bool,
-    freeze_deadlocks: bool,
-    dead_squares: bool,
-    pi_corrals: bool,
-    deadlock_max_nodes: usize,
-    trace_range: Range<usize>,
-}
-
-fn solve_level_helper<H: Heuristic>(game: &Game, opts: SolveOpts) -> LevelStats {
-    let mut solver: Solver<H> = Solver::new(
-        opts.max_nodes_explored,
-        opts.search_type,
-        game.clone(),
-        opts.freeze_deadlocks,
-        opts.dead_squares,
-        opts.pi_corrals,
-        opts.deadlock_max_nodes,
-        opts.trace_range,
-    );
+) -> LevelStats {
+    let mut solver = Solver::<H>::new(game, opts);
     let start = Instant::now();
-    let result = solver.solve();
+    let (result, nodes_explored) = solver.solve();
     let elapsed = start.elapsed();
-    let (nodes_forwards, nodes_backwards) = solver.nodes_explored();
 
-    let total_states = nodes_forwards + nodes_backwards;
     let elapsed_ms = elapsed.as_millis();
 
     let (solved_char, solution_len, solved) = match &result {
         SolveResult::Solved(solution) => ('Y', solution.len(), true),
         SolveResult::Cutoff => ('N', 0, false),
-        SolveResult::Impossible => ('X', 0, false),
+        SolveResult::Unsolvable => ('X', 0, false),
     };
 
     println!(
         "level: {:<3}  solved: {}  steps: {:<5}  states: {:<12}  elapsed: {} ms",
-        opts.level_num, solved_char, solution_len, total_states, elapsed_ms
+        level_num, solved_char, solution_len, nodes_explored, elapsed_ms
     );
 
     // if solved_char != 'Y' {
@@ -122,26 +106,40 @@ fn solve_level_helper<H: Heuristic>(game: &Game, opts: SolveOpts) -> LevelStats 
     //     }
     // }
 
-    if opts.print_solution {
+    if print_solution {
         if let SolveResult::Solved(solution) = result {
-            print_solution(game, &solution);
+            crate::print_solution(game, &solution);
         }
     }
 
     LevelStats {
         solved,
         steps: solution_len,
-        states_explored: total_states,
+        states_explored: nodes_explored,
         elapsed_ms,
     }
 }
 
-fn solve_level(game: &Game, opts: SolveOpts, heuristic_type: HeuristicType) -> LevelStats {
+fn solve_level(
+    game: &Game,
+    level_num: usize,
+    opts: SolverOpts,
+    heuristic_type: HeuristicType,
+    print_solution: bool,
+) -> LevelStats {
     match heuristic_type {
-        HeuristicType::Simple => solve_level_helper::<SimpleHeuristic>(game, opts),
-        HeuristicType::Greedy => solve_level_helper::<GreedyHeuristic>(game, opts),
-        HeuristicType::Hungarian => solve_level_helper::<HungarianHeuristic>(game, opts),
-        HeuristicType::Null => solve_level_helper::<NullHeuristic>(game, opts),
+        HeuristicType::Simple => {
+            solve_level_helper::<SimpleHeuristic>(game, level_num, opts, print_solution)
+        }
+        HeuristicType::Greedy => {
+            solve_level_helper::<GreedyHeuristic>(game, level_num, opts, print_solution)
+        }
+        HeuristicType::Hungarian => {
+            solve_level_helper::<HungarianHeuristic>(game, level_num, opts, print_solution)
+        }
+        HeuristicType::Null => {
+            solve_level_helper::<NullHeuristic>(game, level_num, opts, print_solution)
+        }
     }
 }
 
@@ -280,18 +278,16 @@ fn main() {
 
     for level_num in args.level_start..=level_end {
         let game = levels.get(level_num - 1).unwrap();
-        let opts = SolveOpts {
-            level_num,
-            max_nodes_explored: args.max_nodes,
+        let opts = SolverOpts {
             search_type: args.direction.into(),
-            print_solution: args.print_solution,
+            max_nodes_explored: args.max_nodes,
             freeze_deadlocks: !args.no_freeze_deadlocks,
             dead_squares: !args.no_dead_squares,
             pi_corrals: !args.no_pi_corrals,
             deadlock_max_nodes: args.deadlock_max_nodes,
             trace_range: trace_range.clone(),
         };
-        let stats = solve_level(game, opts, args.heuristic);
+        let stats = solve_level(game, level_num, opts, args.heuristic, args.print_solution);
 
         if stats.solved {
             total_solved += 1;

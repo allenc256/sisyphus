@@ -17,6 +17,7 @@ impl Cost {
 
 impl From<Cost> for usize {
     fn from(cost: Cost) -> usize {
+        assert!(cost.0 != u16::MAX);
         cost.0 as usize
     }
 }
