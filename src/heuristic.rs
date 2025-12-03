@@ -3,6 +3,7 @@ use arrayvec::ArrayVec;
 use crate::{
     bits::{Bitvector, Index},
     game::{ALL_DIRECTIONS, Game, MAX_BOXES, MAX_SIZE, Position, Tile},
+    hungarian::{ArrayMatrix, hungarian_algorithm},
 };
 use std::collections::VecDeque;
 
@@ -71,43 +72,50 @@ impl Heuristic for SimpleHeuristic {
     }
 
     fn compute(&self, game: &Game) -> Cost {
-        // Compute two distances:
-        //   box_to_dst_total: total distance from each box to its nearest destination.
-        //   dst_to_box_total: total distance from each destination to its nearest box.
-        // The simple distance is the maximum between the two.
-        // If either distance is u16::MAX, then the game is unsolvable.
-
-        let mut box_to_dst_total = 0u16;
-        let mut dst_to_box = [u16::MAX; MAX_BOXES];
-        let box_count = game.box_count();
-
-        for pos in game.box_positions().iter() {
-            let mut box_to_dst = u16::MAX;
-
-            for (dst_idx, dst_to_box) in dst_to_box.iter_mut().enumerate().take(box_count) {
-                let distance = self.distances[dst_idx][pos.1 as usize][pos.0 as usize];
-                box_to_dst = std::cmp::min(box_to_dst, distance);
-                *dst_to_box = std::cmp::min(*dst_to_box, distance);
-            }
-
-            if box_to_dst == u16::MAX {
-                return Cost::UNSOLVABLE;
-            }
-
-            box_to_dst_total += box_to_dst;
-        }
-
-        let mut dst_to_box_total = 0;
-        for &dist in dst_to_box.iter().take(box_count) {
-            if dist == u16::MAX {
-                return Cost::UNSOLVABLE;
-            } else {
-                dst_to_box_total += dist;
-            }
-        }
-
-        Cost(std::cmp::max(dst_to_box_total, box_to_dst_total))
+        Cost(compute_simple_heuristic(game, &self.distances))
     }
+}
+
+fn compute_simple_heuristic(
+    game: &Game,
+    distances: &[[[u16; MAX_SIZE]; MAX_SIZE]; MAX_BOXES],
+) -> u16 {
+    // Compute two distances:
+    //   box_to_dst_total: total distance from each box to its nearest destination.
+    //   dst_to_box_total: total distance from each destination to its nearest box.
+    // The simple distance is the maximum between the two.
+    // If either distance is u16::MAX, then the game is unsolvable.
+
+    let mut box_to_dst_total = 0u16;
+    let mut dst_to_box = [u16::MAX; MAX_BOXES];
+    let box_count = game.box_count();
+
+    for pos in game.box_positions().iter() {
+        let mut box_to_dst = u16::MAX;
+
+        for (dst_idx, dst_to_box) in dst_to_box.iter_mut().enumerate().take(box_count) {
+            let distance = distances[dst_idx][pos.1 as usize][pos.0 as usize];
+            box_to_dst = std::cmp::min(box_to_dst, distance);
+            *dst_to_box = std::cmp::min(*dst_to_box, distance);
+        }
+
+        if box_to_dst == u16::MAX {
+            return u16::MAX;
+        }
+
+        box_to_dst_total += box_to_dst;
+    }
+
+    let mut dst_to_box_total = 0;
+    for &dist in dst_to_box.iter().take(box_count) {
+        if dist == u16::MAX {
+            return u16::MAX;
+        } else {
+            dst_to_box_total += dist;
+        }
+    }
+
+    std::cmp::max(dst_to_box_total, box_to_dst_total)
 }
 
 /// Heuristic which attempts to match boxes and goals greedily to find a minimum
@@ -130,74 +138,132 @@ impl Heuristic for GreedyHeuristic {
     }
 
     fn compute(&self, game: &Game) -> Cost {
-        const M: usize = MAX_BOXES * MAX_BOXES;
-        const N: usize = MAX_SIZE * MAX_SIZE;
-        let box_count = game.box_count();
+        // let cost_hungarian = compute_hungarian_heuristic(game, &self.distances);
+        // let cost_greedy = compute_greedy_heuristic(game, &self.distances);
 
-        // Compute all pairs of distances between boxes <-> destinations
-        let mut all_pairs: ArrayVec<(u16, Index, Index), M> = ArrayVec::new();
-        for (box_idx, &pos) in game.box_positions().iter().enumerate() {
-            let box_idx = Index(box_idx as u8);
-            for dst_idx in 0..box_count {
-                let distance = self.distances[dst_idx][pos.1 as usize][pos.0 as usize];
-                if distance < u16::MAX {
-                    let dst_idx = Index(dst_idx as u8);
-                    all_pairs.push((distance, box_idx, dst_idx));
-                }
-            }
-        }
+        // println!(
+        //     "compute greedy={}, hungarian={}:\n{}",
+        //     cost_greedy, cost_hungarian, game
+        // );
 
-        // Perform counting sort over distances (testing w/ built-in sorts
-        // indicate they are too slow in comparison)
-        counting_sort::<_, _, N>(&mut all_pairs, |&(distance, _, _)| distance as usize);
-
-        // Walk through sorted pairs and start matching things up
-        let mut total_distance = 0;
-        let mut unmatched_boxes = Bitvector::full(box_count as u8);
-        let mut unmatched_dsts = Bitvector::full(box_count as u8);
-        for (distance, box_idx, dst_idx) in all_pairs {
-            if unmatched_boxes.contains(box_idx) && unmatched_dsts.contains(dst_idx) {
-                total_distance += distance;
-                unmatched_boxes.remove(box_idx);
-                unmatched_dsts.remove(dst_idx);
-            }
-        }
-
-        // Compute distance lower bound for unmatched boxes -> goals
-        let mut unmatched_box_to_dst = 0;
-        for box_idx in unmatched_boxes.iter() {
-            let pos = game.box_position(box_idx);
-            let min_distance = (0..box_count)
-                .map(|dst_idx| self.distances[dst_idx][pos.1 as usize][pos.0 as usize])
-                .min()
-                .unwrap();
-            if min_distance == u16::MAX {
-                return Cost::UNSOLVABLE;
-            }
-            unmatched_box_to_dst += min_distance;
-        }
-
-        // Compute distance lower bound for unmatched goals -> boxes
-        let mut unmatched_dst_to_box = 0;
-        for dst_idx in unmatched_dsts.iter() {
-            let min_distance = game
-                .box_positions()
-                .iter()
-                .map(|pos| self.distances[dst_idx.0 as usize][pos.1 as usize][pos.0 as usize])
-                .min()
-                .unwrap();
-            if min_distance == u16::MAX {
-                return Cost::UNSOLVABLE;
-            }
-            unmatched_dst_to_box += min_distance;
-        }
-
-        // Add distance for unmatched boxes <-> goals (pick whichever lower
-        // bound is higher)
-        total_distance += std::cmp::max(unmatched_box_to_dst, unmatched_dst_to_box);
-
-        Cost(total_distance)
+        Cost(compute_greedy_heuristic(game, &self.distances))
     }
+}
+
+fn compute_greedy_heuristic(
+    game: &Game,
+    distances: &[[[u16; MAX_SIZE]; MAX_SIZE]; MAX_BOXES],
+) -> u16 {
+    const M: usize = MAX_BOXES * MAX_BOXES;
+    const N: usize = MAX_SIZE * MAX_SIZE;
+    let box_count = game.box_count();
+
+    // Compute all pairs of distances between boxes <-> destinations
+    let mut all_pairs: ArrayVec<(u16, Index, Index), M> = ArrayVec::new();
+    for (box_idx, &pos) in game.box_positions().iter().enumerate() {
+        let box_idx = Index(box_idx as u8);
+        for dst_idx in 0..box_count {
+            let distance = distances[dst_idx][pos.1 as usize][pos.0 as usize];
+            if distance < u16::MAX {
+                let dst_idx = Index(dst_idx as u8);
+                all_pairs.push((distance, box_idx, dst_idx));
+            }
+        }
+    }
+
+    // Perform counting sort over distances (testing w/ built-in sorts
+    // indicate they are too slow in comparison)
+    counting_sort::<_, _, N>(&mut all_pairs, |&(distance, _, _)| distance as usize);
+
+    // Walk through sorted pairs and start matching things up
+    let mut total_distance = 0;
+    let mut unmatched_boxes = Bitvector::full(box_count as u8);
+    let mut unmatched_dsts = Bitvector::full(box_count as u8);
+    for (distance, box_idx, dst_idx) in all_pairs {
+        if unmatched_boxes.contains(box_idx) && unmatched_dsts.contains(dst_idx) {
+            total_distance += distance;
+            unmatched_boxes.remove(box_idx);
+            unmatched_dsts.remove(dst_idx);
+        }
+    }
+
+    // Compute distance lower bound for unmatched boxes -> goals
+    let mut unmatched_box_to_dst = 0;
+    for box_idx in unmatched_boxes.iter() {
+        let pos = game.box_position(box_idx);
+        let min_distance = (0..box_count)
+            .map(|dst_idx| distances[dst_idx][pos.1 as usize][pos.0 as usize])
+            .min()
+            .unwrap();
+        if min_distance == u16::MAX {
+            return u16::MAX;
+        }
+        unmatched_box_to_dst += min_distance;
+    }
+
+    // Compute distance lower bound for unmatched goals -> boxes
+    let mut unmatched_dst_to_box = 0;
+    for dst_idx in unmatched_dsts.iter() {
+        let min_distance = game
+            .box_positions()
+            .iter()
+            .map(|pos| distances[dst_idx.0 as usize][pos.1 as usize][pos.0 as usize])
+            .min()
+            .unwrap();
+        if min_distance == u16::MAX {
+            return u16::MAX;
+        }
+        unmatched_dst_to_box += min_distance;
+    }
+
+    // Add distance for unmatched boxes <-> goals (pick whichever lower
+    // bound is higher)
+    total_distance += std::cmp::max(unmatched_box_to_dst, unmatched_dst_to_box);
+
+    total_distance
+}
+
+/// Heuristic which computes the optimal minimum cost matching between boxes and goals
+/// using the Hungarian algorithm. Runs in O(n^3) time.
+pub struct HungarianHeuristic {
+    /// distances[idx][y][x] = minimum pushes/pulls to get a box from (x, y) to destination idx
+    distances: Box<[[[u16; MAX_SIZE]; MAX_SIZE]; MAX_BOXES]>,
+}
+
+impl Heuristic for HungarianHeuristic {
+    fn new_push(game: &Game) -> Self {
+        let distances = Box::new(compute_push_distances(game));
+        HungarianHeuristic { distances }
+    }
+
+    fn new_pull(game: &Game) -> Self {
+        let distances = Box::new(compute_pull_distances(game));
+        HungarianHeuristic { distances }
+    }
+
+    fn compute(&self, game: &Game) -> Cost {
+        Cost(compute_hungarian_heuristic(game, &self.distances))
+    }
+}
+
+fn compute_hungarian_heuristic(
+    game: &Game,
+    distances: &[[[u16; MAX_SIZE]; MAX_SIZE]; MAX_BOXES],
+) -> u16 {
+    let box_count = game.box_count();
+
+    // Build cost matrix: cost[i][j] = distance from box i to goal j
+    let mut cost_matrix = ArrayMatrix::<u16, { MAX_BOXES * MAX_BOXES }>::new(box_count, box_count);
+
+    for &box_pos in game.box_positions().iter() {
+        for goal_idx in 0..box_count {
+            let distance = distances[goal_idx][box_pos.1 as usize][box_pos.0 as usize];
+            cost_matrix.push(distance);
+        }
+    }
+
+    // Call Hungarian algorithm to find optimal matching
+    hungarian_algorithm(&cost_matrix)
 }
 
 /// Compute push distances from each goal to all positions using BFS with pulls

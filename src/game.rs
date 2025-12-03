@@ -794,8 +794,13 @@ impl Game {
                     continue;
                 }
 
-                self.player_dfs(pos, &mut local_visited, |_pos, _dir, _box_idx| {});
-                result.push(local_visited.top_left().unwrap());
+                let mut found_box = false;
+                self.player_dfs(pos, &mut local_visited, |_pos, _dir, _box_idx| {
+                    found_box = true
+                });
+                if found_box {
+                    result.push(local_visited.top_left().unwrap());
+                }
                 all_visited.set_all(&local_visited);
             }
         }

@@ -3,6 +3,7 @@ mod corral;
 mod frozen;
 mod game;
 mod heuristic;
+mod hungarian;
 mod levels;
 mod solver;
 mod zobrist;
@@ -17,13 +18,14 @@ use std::time::Instant;
 
 use crate::{
     game::{Move, Push},
-    heuristic::GreedyHeuristic,
+    heuristic::{GreedyHeuristic, HungarianHeuristic},
 };
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
 enum HeuristicType {
     Simple,
     Greedy,
+    Hungarian,
     Null,
 }
 
@@ -138,6 +140,7 @@ fn solve_level(game: &Game, opts: SolveOpts, heuristic_type: HeuristicType) -> L
     match heuristic_type {
         HeuristicType::Simple => solve_level_helper::<SimpleHeuristic>(game, opts),
         HeuristicType::Greedy => solve_level_helper::<GreedyHeuristic>(game, opts),
+        HeuristicType::Hungarian => solve_level_helper::<HungarianHeuristic>(game, opts),
         HeuristicType::Null => solve_level_helper::<NullHeuristic>(game, opts),
     }
 }
@@ -197,7 +200,7 @@ struct Args {
     max_nodes: usize,
 
     /// Heuristic to use for solving
-    #[arg(short = 'H', long, value_enum, default_value = "greedy")]
+    #[arg(short = 'H', long, value_enum, default_value = "hungarian")]
     heuristic: HeuristicType,
 
     /// Search type

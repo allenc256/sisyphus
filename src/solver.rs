@@ -302,6 +302,13 @@ impl<H: Heuristic, S: SearchHelper> Searcher<H, S> {
 
         // Try each move
         for move_ in &moves {
+            // Make sure we're not trying to push a frozen box (this generally
+            // shouldn't happen, but there are some non-default CLI settings
+            // that allow this to occur)
+            if frozen_boxes.contains(move_.box_index()) {
+                continue;
+            }
+
             let old_box_pos = game.box_position(move_.box_index());
             let new_box_pos = game.move_position(old_box_pos, move_.direction()).unwrap();
 
