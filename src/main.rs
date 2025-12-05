@@ -222,7 +222,7 @@ struct Args {
     deadlock_max_nodes: usize,
 
     /// Range of node counts to trace (e.g., "100..200", "100..=200", or "100")
-    #[arg(long, value_parser = parse_trace_range)]
+    #[arg(short = 't', long, value_parser = parse_trace_range)]
     trace_range: Option<Range<usize>>,
 }
 

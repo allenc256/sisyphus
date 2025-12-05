@@ -226,7 +226,7 @@ struct Searcher<H, S> {
     open_list: PriorityQueue<Node>,
     table: HashMap<u64, TableEntry>,
     zobrist: Rc<Zobrist>,
-    heuristic_cache: HashMap<u64, H>,
+    heuristic: HashMap<u64, H>,
     helper: S,
 }
 
@@ -245,7 +245,7 @@ impl<H: Heuristic, S: SearchHelper> Searcher<H, S> {
     ) -> Self {
         let mut open_list = PriorityQueue::new();
         let mut table = HashMap::new();
-        let mut heuristic_cache: HashMap<u64, H> = HashMap::new();
+        let mut heuristic: HashMap<u64, H> = HashMap::new();
         let mut game = game.clone();
 
         // Loop through initial positions
@@ -258,7 +258,7 @@ impl<H: Heuristic, S: SearchHelper> Searcher<H, S> {
 
             // Compute initial cost
             let frozen_boxes_hash = zobrist.compute_boxes_hash_subset(&game, frozen_boxes);
-            let cost = heuristic_cache
+            let cost = heuristic
                 .entry(frozen_boxes_hash)
                 .or_insert_with(|| helper.new_heuristic(&game, frozen_boxes))
                 .compute(&game);
@@ -290,7 +290,7 @@ impl<H: Heuristic, S: SearchHelper> Searcher<H, S> {
             open_list,
             table,
             zobrist,
-            heuristic_cache,
+            heuristic,
             helper,
         }
     }
@@ -428,7 +428,7 @@ impl<H: Heuristic, S: SearchHelper> Searcher<H, S> {
                 .zobrist
                 .compute_boxes_hash_subset(&self.game, child_frozen_boxes);
             let child_cost = self
-                .heuristic_cache
+                .heuristic
                 .entry(frozen_hash)
                 .or_insert_with(|| {
                     self.helper
@@ -463,7 +463,7 @@ impl<H: Heuristic, S: SearchHelper> Searcher<H, S> {
         let mut current_game = self.game.clone();
         let mut current_hash = self.zobrist.compute_hash(&current_game);
 
-        // Work backwards until we reach the initial state (parent_hash == 0)
+        // Work backwards until we reach an initial state (parent_hash == 0)
         loop {
             let entry = self
                 .table
@@ -471,7 +471,7 @@ impl<H: Heuristic, S: SearchHelper> Searcher<H, S> {
                 .expect("Failed to reconstruct solution: state not in transposition table");
 
             if entry.parent_hash == 0 {
-                // Reached initial state
+                // Reached an initial state
                 break;
             }
 

@@ -282,6 +282,8 @@ fn compute_frozen_boxes_and_goals(
     (frozen_boxes_bitboard, frozen_goals)
 }
 
+const MAX_HUNGARIAN_BOXES: usize = 39;
+
 fn compute_hungarian_heuristic(
     game: &Game,
     distances: &[[[u16; MAX_SIZE]; MAX_SIZE]; MAX_BOXES],
@@ -290,6 +292,12 @@ fn compute_hungarian_heuristic(
 ) -> u16 {
     let box_count = game.box_count();
     let unfrozen_count = box_count - frozen_goals.len();
+
+    // Somewhat arbitrarily set threshold at which to switch from O(n^3) to
+    // O(n^2) algorithm
+    if unfrozen_count > MAX_HUNGARIAN_BOXES {
+        return compute_simple_heuristic(game, distances);
+    }
 
     // Build cost matrix: cost[i][j] = distance from unfrozen box i to unfrozen goal j
     let mut cost_matrix =
