@@ -48,6 +48,8 @@ trait SearchHelper {
         box_idx: Index,
     ) -> Bitvector;
 
+    fn new_heuristic<H: Heuristic>(&self, game: &Game, frozen_boxes: Bitvector) -> H;
+
     fn to_push_by_pos(&self, game: &Game, move_: &Self::Move) -> PushByPos;
 }
 
@@ -135,6 +137,10 @@ impl SearchHelper for ForwardSearchHelper {
         }
     }
 
+    fn new_heuristic<H: Heuristic>(&self, game: &Game, frozen_boxes: Bitvector) -> H {
+        H::new_push(game, frozen_boxes)
+    }
+
     fn to_push_by_pos(&self, game: &Game, push: &Push) -> PushByPos {
         PushByPos {
             box_pos: game.box_position(push.box_index()),
@@ -191,6 +197,10 @@ impl SearchHelper for ReverseSearchHelper {
         Bitvector::new()
     }
 
+    fn new_heuristic<H: Heuristic>(&self, game: &Game, frozen_boxes: Bitvector) -> H {
+        H::new_pull(game, frozen_boxes)
+    }
+
     fn to_push_by_pos(&self, game: &Game, pull: &Pull) -> PushByPos {
         let new_box_pos = game.box_position(pull.box_index());
         let old_box_pos = game.move_position(new_box_pos, pull.direction()).unwrap();
@@ -216,7 +226,7 @@ struct Searcher<H, S> {
     open_list: PriorityQueue<Node>,
     table: HashMap<u64, TableEntry>,
     zobrist: Rc<Zobrist>,
-    heuristic: H,
+    heuristic_cache: HashMap<u64, H>,
     helper: S,
 }
 
@@ -231,11 +241,11 @@ impl<H: Heuristic, S: SearchHelper> Searcher<H, S> {
         game: &Game,
         zobrist: Rc<Zobrist>,
         initial_player_positions: &[Position],
-        heuristic: H,
         helper: S,
     ) -> Self {
         let mut open_list = PriorityQueue::new();
         let mut table = HashMap::new();
+        let mut heuristic_cache: HashMap<u64, H> = HashMap::new();
         let mut game = game.clone();
 
         // Loop through initial positions
@@ -243,14 +253,20 @@ impl<H: Heuristic, S: SearchHelper> Searcher<H, S> {
             // Set initial position
             game.set_player(pos);
 
+            // Compute frozen boxes
+            let frozen_boxes = helper.compute_frozen_boxes(&game);
+
             // Compute initial cost
-            let cost = heuristic.compute(&game);
-            if cost == Cost::UNSOLVABLE {
+            let frozen_boxes_hash = zobrist.compute_boxes_hash_subset(&game, frozen_boxes);
+            let cost = heuristic_cache
+                .entry(frozen_boxes_hash)
+                .or_insert_with(|| helper.new_heuristic(&game, frozen_boxes))
+                .compute(&game);
+            if cost == Cost::INFINITE {
                 continue;
             }
 
             // Insert into open_list
-            let frozen_boxes = helper.compute_frozen_boxes(&game);
             open_list.push(
                 usize::from(cost),
                 Node {
@@ -274,7 +290,7 @@ impl<H: Heuristic, S: SearchHelper> Searcher<H, S> {
             open_list,
             table,
             zobrist,
-            heuristic,
+            heuristic_cache,
             helper,
         }
     }
@@ -407,11 +423,21 @@ impl<H: Heuristic, S: SearchHelper> Searcher<H, S> {
                 }
             };
 
-            // Compute child cost
-            let child_cost = self.heuristic.compute(&self.game);
+            // Compute child cost using appropriate heuristic
+            let frozen_hash = self
+                .zobrist
+                .compute_boxes_hash_subset(&self.game, child_frozen_boxes);
+            let child_cost = self
+                .heuristic_cache
+                .entry(frozen_hash)
+                .or_insert_with(|| {
+                    self.helper
+                        .new_heuristic::<H>(&self.game, child_frozen_boxes)
+                })
+                .compute(&self.game);
 
             // If unsolvable, skip
-            if child_cost == Cost::UNSOLVABLE {
+            if child_cost == Cost::INFINITE {
                 self.helper.apply_unmove(&mut self.game, &move_);
                 continue;
             }
@@ -506,9 +532,6 @@ impl<H: Heuristic> Solver<H> {
         let forward_player_positions = [game.canonical_player_pos()];
         let reverse_player_positions = reverse_game.all_possible_player_positions();
 
-        let forward_heuristic = H::new_push(game);
-        let reverse_heuristic = H::new_pull(&reverse_game);
-
         let forward_helper = ForwardSearchHelper {
             corral_searcher: CorralSearcher::new(zobrist.clone(), opts.deadlock_max_nodes),
             dead_squares: opts.dead_squares,
@@ -523,14 +546,12 @@ impl<H: Heuristic> Solver<H> {
             game,
             zobrist.clone(),
             &forward_player_positions,
-            forward_heuristic,
             forward_helper,
         );
         let reverse_searcher = Searcher::new(
             &reverse_game,
             zobrist,
             &reverse_player_positions,
-            reverse_heuristic,
             reverse_helper,
         );
 

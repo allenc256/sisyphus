@@ -1,4 +1,7 @@
-use crate::game::{Game, MAX_SIZE, Position};
+use crate::{
+    bits::Bitvector,
+    game::{Game, MAX_SIZE, Position},
+};
 use rand::{RngCore, SeedableRng};
 use rand_chacha::ChaCha8Rng;
 
@@ -47,6 +50,16 @@ impl Zobrist {
     pub fn compute_boxes_hash(&self, game: &Game) -> u64 {
         let mut boxes_hash = 0u64;
         for &pos in game.box_positions() {
+            boxes_hash ^= self.box_hash(pos);
+        }
+        boxes_hash
+    }
+
+    /// Compute hash for a subset of boxes in a game state
+    pub fn compute_boxes_hash_subset(&self, game: &Game, subset: Bitvector) -> u64 {
+        let mut boxes_hash = 0u64;
+        for box_idx in subset.iter() {
+            let pos = game.box_position(box_idx);
             boxes_hash ^= self.box_hash(pos);
         }
         boxes_hash

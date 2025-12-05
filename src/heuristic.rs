@@ -1,7 +1,7 @@
 use arrayvec::ArrayVec;
 
 use crate::{
-    bits::{Bitvector, Index},
+    bits::{Bitvector, Index, RawBitboard},
     game::{ALL_DIRECTIONS, Game, MAX_BOXES, MAX_SIZE, Position, Tile},
     hungarian::{ArrayMatrix, hungarian_algorithm},
 };
@@ -12,7 +12,7 @@ use std::collections::VecDeque;
 pub struct Cost(u16);
 
 impl Cost {
-    pub const UNSOLVABLE: Cost = Cost(u16::MAX);
+    pub const INFINITE: Cost = Cost(u16::MAX);
 }
 
 impl From<Cost> for usize {
@@ -25,12 +25,12 @@ impl From<Cost> for usize {
 /// Trait for computing heuristics that estimate the number of moves (pushes/pulls) needed.
 pub trait Heuristic {
     /// Create a push-oriented heuristic for forward search.
-    fn new_push(game: &Game) -> Self
+    fn new_push(game: &Game, frozen_boxes: Bitvector) -> Self
     where
         Self: Sized;
 
     /// Create a pull-oriented heuristic for reverse search.
-    fn new_pull(game: &Game) -> Self
+    fn new_pull(game: &Game, frozen_boxes: Bitvector) -> Self
     where
         Self: Sized;
 
@@ -42,11 +42,11 @@ pub trait Heuristic {
 pub struct NullHeuristic;
 
 impl Heuristic for NullHeuristic {
-    fn new_push(_game: &Game) -> Self {
+    fn new_push(_game: &Game, _frozen_boxes: Bitvector) -> Self {
         NullHeuristic
     }
 
-    fn new_pull(_game: &Game) -> Self {
+    fn new_pull(_game: &Game, _frozen_boxes: Bitvector) -> Self {
         NullHeuristic
     }
 
@@ -62,13 +62,13 @@ pub struct SimpleHeuristic {
 }
 
 impl Heuristic for SimpleHeuristic {
-    fn new_push(game: &Game) -> Self {
-        let distances = Box::new(compute_push_distances(game));
+    fn new_push(game: &Game, frozen_boxes: Bitvector) -> Self {
+        let distances = Box::new(compute_push_distances(game, &frozen_boxes));
         SimpleHeuristic { distances }
     }
 
-    fn new_pull(game: &Game) -> Self {
-        let distances = Box::new(compute_pull_distances(game));
+    fn new_pull(game: &Game, frozen_boxes: Bitvector) -> Self {
+        let distances = Box::new(compute_pull_distances(game, &frozen_boxes));
         SimpleHeuristic { distances }
     }
 
@@ -128,25 +128,17 @@ pub struct GreedyHeuristic {
 }
 
 impl Heuristic for GreedyHeuristic {
-    fn new_push(game: &Game) -> Self {
-        let distances = Box::new(compute_push_distances(game));
+    fn new_push(game: &Game, frozen_boxes: Bitvector) -> Self {
+        let distances = Box::new(compute_push_distances(game, &frozen_boxes));
         GreedyHeuristic { distances }
     }
 
-    fn new_pull(game: &Game) -> Self {
-        let distances = Box::new(compute_pull_distances(game));
+    fn new_pull(game: &Game, frozen_boxes: Bitvector) -> Self {
+        let distances = Box::new(compute_pull_distances(game, &frozen_boxes));
         GreedyHeuristic { distances }
     }
 
     fn compute(&self, game: &Game) -> Cost {
-        // let cost_hungarian = compute_hungarian_heuristic(game, &self.distances);
-        // let cost_greedy = compute_greedy_heuristic(game, &self.distances);
-
-        // println!(
-        //     "compute greedy={}, hungarian={}:\n{}",
-        //     cost_greedy, cost_hungarian, game
-        // );
-
         Cost(compute_greedy_heuristic(game, &self.distances))
     }
 }
@@ -230,36 +222,92 @@ fn compute_greedy_heuristic(
 pub struct HungarianHeuristic {
     /// distances[idx][y][x] = minimum pushes/pulls to get a box from (x, y) to destination idx
     distances: Box<[[[u16; MAX_SIZE]; MAX_SIZE]; MAX_BOXES]>,
+    frozen_boxes: RawBitboard,
+    frozen_goals: Bitvector,
 }
 
 impl Heuristic for HungarianHeuristic {
-    fn new_push(game: &Game) -> Self {
-        let distances = Box::new(compute_push_distances(game));
-        HungarianHeuristic { distances }
+    fn new_push(game: &Game, frozen_boxes: Bitvector) -> Self {
+        let distances = Box::new(compute_push_distances(game, &frozen_boxes));
+        let (frozen_boxes, frozen_goals) = compute_frozen_boxes_and_goals(game, &frozen_boxes);
+        HungarianHeuristic {
+            distances,
+            frozen_boxes,
+            frozen_goals,
+        }
     }
 
-    fn new_pull(game: &Game) -> Self {
-        let distances = Box::new(compute_pull_distances(game));
-        HungarianHeuristic { distances }
+    fn new_pull(game: &Game, frozen_boxes: Bitvector) -> Self {
+        let distances = Box::new(compute_pull_distances(game, &frozen_boxes));
+        let (frozen_boxes, frozen_goals) = compute_frozen_boxes_and_goals(game, &frozen_boxes);
+        HungarianHeuristic {
+            distances,
+            frozen_boxes,
+            frozen_goals,
+        }
     }
 
     fn compute(&self, game: &Game) -> Cost {
-        Cost(compute_hungarian_heuristic(game, &self.distances))
+        Cost(compute_hungarian_heuristic(
+            game,
+            &self.distances,
+            &self.frozen_boxes,
+            &self.frozen_goals,
+        ))
     }
+}
+
+fn compute_frozen_boxes_and_goals(
+    game: &Game,
+    frozen_boxes: &Bitvector,
+) -> (RawBitboard, Bitvector) {
+    let mut frozen_boxes_bitboard = RawBitboard::new();
+    let mut frozen_goals = Bitvector::new();
+
+    for (goal_idx, &goal_pos) in game.goal_positions().iter().enumerate() {
+        if let Some(box_idx) = game.box_index(goal_pos) {
+            if frozen_boxes.contains(box_idx) {
+                frozen_boxes_bitboard.set(goal_pos);
+                frozen_goals.add(Index(goal_idx as u8));
+            }
+        }
+    }
+
+    assert_eq!(
+        frozen_boxes.len(),
+        frozen_goals.len(),
+        "Each frozen box must reside on a goal"
+    );
+
+    (frozen_boxes_bitboard, frozen_goals)
 }
 
 fn compute_hungarian_heuristic(
     game: &Game,
     distances: &[[[u16; MAX_SIZE]; MAX_SIZE]; MAX_BOXES],
+    frozen_boxes: &RawBitboard,
+    frozen_goals: &Bitvector,
 ) -> u16 {
     let box_count = game.box_count();
+    let unfrozen_count = box_count - frozen_goals.len();
 
-    // Build cost matrix: cost[i][j] = distance from box i to goal j
-    let mut cost_matrix = ArrayMatrix::<u16, { MAX_BOXES * MAX_BOXES }>::new(box_count, box_count);
+    // Build cost matrix: cost[i][j] = distance from unfrozen box i to unfrozen goal j
+    let mut cost_matrix =
+        ArrayMatrix::<u16, { MAX_BOXES * MAX_BOXES }>::new(unfrozen_count, unfrozen_count);
 
     for &box_pos in game.box_positions().iter() {
+        // Skip frozen boxes
+        if frozen_boxes.get(box_pos) {
+            continue;
+        }
+
         #[allow(clippy::needless_range_loop)]
         for goal_idx in 0..box_count {
+            // Skip frozen goals
+            if frozen_goals.contains(Index(goal_idx as u8)) {
+                continue;
+            }
+
             let distance = distances[goal_idx][box_pos.1 as usize][box_pos.0 as usize];
             cost_matrix.push(distance);
         }
@@ -270,32 +318,51 @@ fn compute_hungarian_heuristic(
 }
 
 /// Compute push distances from each goal to all positions using BFS with pulls
-fn compute_push_distances(game: &Game) -> [[[u16; MAX_SIZE]; MAX_SIZE]; MAX_BOXES] {
+fn compute_push_distances(
+    game: &Game,
+    frozen_boxes: &Bitvector,
+) -> [[[u16; MAX_SIZE]; MAX_SIZE]; MAX_BOXES] {
     let mut distances = [[[u16::MAX; MAX_SIZE]; MAX_SIZE]; MAX_BOXES];
 
     for (goal_idx, &goal_pos) in game.goal_positions().iter().enumerate() {
-        bfs_pulls(game, goal_pos, &mut distances[goal_idx]);
+        bfs_pulls(game, goal_pos, frozen_boxes, &mut distances[goal_idx]);
     }
 
     distances
 }
 
 /// Compute pull distances from each goal to all positions using BFS with pushes
-fn compute_pull_distances(game: &Game) -> [[[u16; MAX_SIZE]; MAX_SIZE]; MAX_BOXES] {
+fn compute_pull_distances(
+    game: &Game,
+    frozen_boxes: &Bitvector,
+) -> [[[u16; MAX_SIZE]; MAX_SIZE]; MAX_BOXES] {
     let mut distances = [[[u16::MAX; MAX_SIZE]; MAX_SIZE]; MAX_BOXES];
 
     for (goal_idx, &goal_pos) in game.goal_positions().iter().enumerate() {
-        bfs_pushes(game, goal_pos, &mut distances[goal_idx]);
+        bfs_pushes(game, goal_pos, frozen_boxes, &mut distances[goal_idx]);
     }
 
     distances
 }
 
 /// BFS using pulls to compute distances from a goal position
-fn bfs_pulls(game: &Game, goal_pos: Position, distances: &mut [[u16; MAX_SIZE]; MAX_SIZE]) {
+fn bfs_pulls(
+    game: &Game,
+    goal_pos: Position,
+    frozen_boxes: &Bitvector,
+    distances: &mut [[u16; MAX_SIZE]; MAX_SIZE],
+) {
+    distances[goal_pos.1 as usize][goal_pos.0 as usize] = 0;
+
+    // Check if this goal is frozen
+    if let Some(box_idx) = game.box_index(goal_pos) {
+        if frozen_boxes.contains(box_idx) {
+            return;
+        }
+    }
+
     let mut queue = VecDeque::new();
     queue.push_back(goal_pos);
-    distances[goal_pos.1 as usize][goal_pos.0 as usize] = 0;
 
     while let Some(box_pos) = queue.pop_front() {
         let dist = distances[box_pos.1 as usize][box_pos.0 as usize];
@@ -306,8 +373,18 @@ fn bfs_pulls(game: &Game, goal_pos: Position, distances: &mut [[u16; MAX_SIZE]; 
                     let new_box_tile = game.get_tile(new_box_pos);
                     let player_tile = game.get_tile(player_pos);
 
+                    // Check if new_box_pos or player_pos has a frozen box
+                    let new_box_frozen = game
+                        .box_index(new_box_pos)
+                        .is_some_and(|idx| frozen_boxes.contains(idx));
+                    let player_frozen = game
+                        .box_index(player_pos)
+                        .is_some_and(|idx| frozen_boxes.contains(idx));
+
                     if (new_box_tile == Tile::Floor || new_box_tile == Tile::Goal)
                         && (player_tile == Tile::Floor || player_tile == Tile::Goal)
+                        && !new_box_frozen
+                        && !player_frozen
                         && distances[new_box_pos.1 as usize][new_box_pos.0 as usize] == u16::MAX
                     {
                         distances[new_box_pos.1 as usize][new_box_pos.0 as usize] = dist + 1;
@@ -320,7 +397,12 @@ fn bfs_pulls(game: &Game, goal_pos: Position, distances: &mut [[u16; MAX_SIZE]; 
 }
 
 /// BFS using pushes to compute distances from a box start position
-fn bfs_pushes(game: &Game, start_pos: Position, distances: &mut [[u16; MAX_SIZE]; MAX_SIZE]) {
+fn bfs_pushes(
+    game: &Game,
+    start_pos: Position,
+    frozen_boxes: &Bitvector,
+    distances: &mut [[u16; MAX_SIZE]; MAX_SIZE],
+) {
     let mut queue = VecDeque::new();
     queue.push_back(start_pos);
     distances[start_pos.1 as usize][start_pos.0 as usize] = 0;
@@ -334,8 +416,18 @@ fn bfs_pushes(game: &Game, start_pos: Position, distances: &mut [[u16; MAX_SIZE]
                     let new_box_tile = game.get_tile(new_box_pos);
                     let player_tile = game.get_tile(player_pos);
 
+                    // Check if new_box_pos or player_pos has a frozen box
+                    let new_box_frozen = game
+                        .box_index(new_box_pos)
+                        .is_some_and(|idx| frozen_boxes.contains(idx));
+                    let player_frozen = game
+                        .box_index(player_pos)
+                        .is_some_and(|idx| frozen_boxes.contains(idx));
+
                     if (new_box_tile == Tile::Floor || new_box_tile == Tile::Goal)
                         && (player_tile == Tile::Floor || player_tile == Tile::Goal)
+                        && !new_box_frozen
+                        && !player_frozen
                         && distances[new_box_pos.1 as usize][new_box_pos.0 as usize] == u16::MAX
                     {
                         distances[new_box_pos.1 as usize][new_box_pos.0 as usize] = dist + 1;
@@ -423,7 +515,7 @@ mod tests {
                      #@*#\n\
                      ####";
         let game = Game::from_text(input).unwrap();
-        let heuristic = SimpleHeuristic::new_push(&game);
+        let heuristic = SimpleHeuristic::new_push(&game, Bitvector::new());
 
         assert_eq!(heuristic.compute(&game), Cost(0));
     }
@@ -434,7 +526,7 @@ mod tests {
                      #@$.#\n\
                      ####";
         let game = Game::from_text(input).unwrap();
-        let heuristic = SimpleHeuristic::new_push(&game);
+        let heuristic = SimpleHeuristic::new_push(&game, Bitvector::new());
 
         // Box at (2,1), goal at (3,1), push distance = 1
         assert_eq!(heuristic.compute(&game), Cost(1));
@@ -449,7 +541,7 @@ mod tests {
                      #  @ #\n\
                      ######";
         let game = Game::from_text(input).unwrap();
-        let heuristic = SimpleHeuristic::new_push(&game);
+        let heuristic = SimpleHeuristic::new_push(&game, Bitvector::new());
 
         // Two boxes at (2,2) and (3,2), two goals at (2,3) and (3,3)
         // Simple matching should pair them optimally: each box is 1 away from a goal
