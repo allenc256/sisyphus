@@ -1,4 +1,6 @@
-# sisyphus
+<p align="center">
+  <img width="400" height="400" alt="temp" src="https://github.com/user-attachments/assets/096231ec-7d5a-4e77-a966-c508ac5e708a" />
+</p>
 
 A program for solving the game of Sokoban. In contrast to my previous solver
 [dum-dum](https://github.com/allenc256/dum-dum) for double-dummy Bridge hands,
