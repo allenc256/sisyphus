@@ -11,3 +11,8 @@ rand_chacha = "0.3"
 
 [profile.dev]
 opt-level = 1
+
+# [profile.release]
+# debug = true          # equivalent to -C debuginfo=2 now
+# lto = false           # optional, for simpler call graphs
+# codegen-units = 1     # or more, depending on your needs
