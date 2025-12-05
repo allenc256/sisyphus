@@ -218,7 +218,7 @@ struct Args {
     no_pi_corrals: bool,
 
     /// Maximum nodes to explore when searching for corral deadlocks
-    #[arg(long, default_value = "0")]
+    #[arg(long, default_value = "20")]
     deadlock_max_nodes: usize,
 
     /// Range of node counts to trace (e.g., "100..200", "100..=200", or "100")
