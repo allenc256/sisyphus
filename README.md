@@ -121,5 +121,6 @@ The solver implements the following search key techniques:
 The solver is powerful enough to easily solve simple levels (e.g.,
 [Microban](http://www.abelmartin.com/rj/sokobanJS/Skinner/David%20W.%20Skinner%20-%20Sokoban.htm)
 levels by David W. Skinner), but it certainly has not implemented some of the
-more complex techniques used by SOTA solvers.
+more complex techniques used by SOTA solvers necessary to solve more complex
+levels.
 
