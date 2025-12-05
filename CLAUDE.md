@@ -23,13 +23,16 @@ cargo run -- levels.xsb 1 10           # Solve levels 1-10
 cargo run -- levels.xsb 5 --print-solution  # Show step-by-step solution
 cargo run -- levels.xsb 3 -n 10000000  # Set max nodes explored
 cargo run -- levels.xsb 1 -H null      # Use null heuristic (pure iterative deepening)
-cargo run -- levels.xsb 1 -H greedy    # Use greedy heuristic (default)
-cargo run -- levels.xsb 1 -d forward   # Search forwards from initial state (default)
+cargo run -- levels.xsb 1 -H simple    # Use simple heuristic (admissible)
+cargo run -- levels.xsb 1 -H greedy    # Use greedy heuristic (fast, not admissible)
+cargo run -- levels.xsb 1 -H hungarian # Use Hungarian algorithm (optimal, default)
+cargo run -- levels.xsb 1 -d forward   # Search forwards from initial state
 cargo run -- levels.xsb 1 -d reverse   # Search backwards from goal state
-cargo run -- levels.xsb 1 -d bidirectional  # Bidirectional search
-cargo run -- levels.xsb 1 -p none      # No pruning
-cargo run -- levels.xsb 1 -p dead-squares   # Dead square pruning (default)
-cargo run -- levels.xsb 1 -p pi-corrals     # PI-corral pruning (includes dead squares)
+cargo run -- levels.xsb 1 -d bidirectional  # Bidirectional search (default)
+cargo run -- levels.xsb 1 --no-freeze-deadlocks  # Disable freeze deadlock detection
+cargo run -- levels.xsb 1 --no-dead-squares      # Disable dead square pruning
+cargo run -- levels.xsb 1 --no-pi-corrals        # Disable PI-corral pruning
+cargo run -- levels.xsb 1 --deadlock-max-nodes 20  # Set corral search node limit
 ```
 
 For better performance, use release mode:
@@ -41,8 +44,18 @@ cargo run --release -- levels.xsb 1
 ```bash
 cargo test                    # Run all tests
 cargo test <test_name>        # Run a specific test
+cargo test <module>::tests    # Run tests for a specific module
 cargo test -- --nocapture     # Run tests with output visible
 cargo test -- --test-threads=1 # Run tests sequentially
+```
+
+**Test Writing Convention**: Game board tests use multiline raw string literals with `r#"..."#` syntax for readability. A helper function `parse_game()` strips leading/trailing newlines. Example:
+```rust
+let game = parse_game(r#"
+####
+#@$.#
+####
+"#).unwrap();
 ```
 
 ### Linting and Formatting
@@ -76,29 +89,52 @@ cargo fmt -- --check # Check formatting without modifying files
   - Returns `SolveResult` enum (Solved, Impossible, Cutoff)
 
 - **heuristic.rs**: Heuristic functions for A* search
-  - `Heuristic` trait: defines `new_push()`, `new_pull()`, `compute_forward()`, and `compute_backward()` methods
-  - `GreedyHeuristic`: Greedy assignment heuristic using Manhattan distance (not admissible, but fast)
-  - `SimpleHeuristic`: Simple assignment heuristic (admissible, slower)
+  - `Heuristic` trait: defines `new_push()`, `new_pull()`, and `compute()` methods
+  - `SimpleHeuristic`: Simple assignment heuristic (admissible but slower)
+  - `GreedyHeuristic`: Greedy assignment heuristic using counting sort (O(n²), not admissible but fast)
+  - `HungarianHeuristic`: Optimal assignment heuristic using Hungarian algorithm (O(n³), admissible, default)
   - `NullHeuristic`: Returns 0 (reduces to iterative deepening)
-  - Supports heuristic caching for performance
+  - All heuristics precompute push/pull distances from goals using BFS
+  - Frozen boxes (boxes that cannot move) are excluded from heuristic computation
+
+- **hungarian.rs**: Hungarian algorithm for minimum cost matching
+  - Implements Kuhn-Munkres algorithm for optimal box-to-goal assignment
+  - `Matrix` trait: abstraction for cost matrices
+  - `ArrayMatrix`: Stack-allocated matrix using ArrayVec (no heap allocations)
+  - Used by HungarianHeuristic to compute admissible lower bounds
 
 - **zobrist.rs**: Zobrist hashing for game state identification
   - Pre-generates random hash values for each board position
   - Separate hash tables for box positions and player positions
-  - Enables efficient incremental hash updates during search
+  - Enables efficient incremental hash updates during search (XOR old position, XOR new position)
 
-- **deadlocks.rs**: Deadlock detection for pruning unsolvable states
-  - `compute_frozen_boxes()`: Identifies boxes that cannot be moved
+- **frozen.rs**: Freeze deadlock detection
+  - `compute_frozen_boxes()`: Identifies boxes that cannot be moved due to surrounding walls/boxes
   - `compute_new_frozen_boxes()`: Incremental frozen box computation after a push
-  - Used to prune states where boxes are in positions they cannot escape from
+  - Used to detect when boxes form immovable structures
+  - Freezing propagates: if a box is frozen and another box blocks it, that box also becomes frozen
+
+- **corral.rs**: PI-corral deadlock detection
+  - Implements "packing inside corral" deadlock detection
+  - `Corral`: Represents a region of boxes that could potentially be trapped
+  - `CorralSearcher`: Uses DFS to check if boxes in a corral can all reach goals
+  - More expensive than freeze detection but catches additional deadlock patterns
+  - Configurable node limit (default 20) for corral search depth
 
 - **bits.rs**: Bit manipulation utilities
   - `Bitvector`: 64-bit bitvector for efficient set operations on box indices
+  - `RawBitboard`: 64×64 bitboard for position-based checks (used for frozen boxes)
+  - `LazyBitboard`: Lazily initialized bitboard for reachability calculations
   - `Index`: Type-safe wrapper for box indices
   - `Position`: Type-safe wrapper for (x, y) board positions
 
+- **pqueue.rs**: Priority queue implementation
+  - Custom binary heap optimized for the solver's needs
+  - Used in A* search to track frontier nodes
+
 - **levels.rs**: XSB format level file parsing
-  - Parses levels separated by semicolon-prefixed comments or empty lines
+  - Parses levels where any line not starting with `#` (after optional spaces) is a separator
+  - Empty lines, comment lines (`;`), and other text all separate levels
   - Returns collection of `Game` instances
 
 ### Important Design Details
@@ -111,10 +147,10 @@ cargo fmt -- --check # Check formatting without modifying files
 
 4. **Bidirectional Search**: When enabled, alternates between forward and backward search based on nodes explored. The searchers detect overlap by checking if a state exists in the other searcher's transposition table. **Important limitation**: Not guaranteed to find optimal solutions because A* doesn't explore in BFS order.
 
-5. **Pruning Strategies**:
-   - `Pruning::None`: No pruning
-   - `Pruning::DeadSquares`: Prunes moves to positions where boxes can never reach any goal
-   - `Pruning::PiCorrals`: Advanced pruning using PI-corral detection (implies dead square pruning)
+5. **Pruning Strategies**: All pruning techniques are independently configurable via CLI flags:
+   - **Freeze deadlock detection** (enabled by default): Detects when boxes form immovable structures
+   - **Dead square pruning** (enabled by default): Prunes moves to positions where boxes can never reach any goal
+   - **PI-corral pruning** (enabled by default): Detects when boxes are trapped in regions they cannot escape
 
 6. **Dead Square Detection**: On initialization, `compute_dead_squares()` performs backward reachability analysis from goal positions to identify squares where boxes can never reach any goal. Separate analysis for push-dead squares (forward search) and pull-dead squares (backward search).
 
@@ -123,9 +159,17 @@ cargo fmt -- --check # Check formatting without modifying files
 8. **Transposition Table**: Stores parent state hash and g-cost (depth) for each visited state. This enables solution reconstruction by following parent links backwards from the final state. States revisited at equal or greater depth are pruned.
 
 9. **Constants**:
-   - `MAX_SIZE = 64`: Maximum board dimension
-   - `MAX_BOXES = 32`: Maximum number of boxes
+   - `MAX_SIZE = 64`: Maximum board dimension (x and y)
+   - `MAX_BOXES = 64`: Maximum number of boxes (changed from 32, affects all stack-allocated arrays)
    - Default node limit: 5 million states
+   - Default corral search node limit: 20 states
+
+10. **Performance Optimizations**:
+   - Stack allocation preferred over heap (ArrayVec used extensively)
+   - Counting sort for heuristic computations (faster than built-in sorts for small ranges)
+   - Lazy initialization of bitboards to avoid unnecessary allocations
+   - Incremental hash updates to avoid full state rehashing
+   - MaybeUninit for uninitialized arrays to avoid initialization overhead
 
 ### XSB Level File Format
 
