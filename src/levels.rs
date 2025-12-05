@@ -53,24 +53,13 @@ impl Levels {
         let mut current_level = String::new();
 
         for line in contents.lines() {
-            // Skip comment lines (level separators)
-            if line.trim_start().starts_with(';') {
-                // If we have accumulated a level, parse and save it
-                if !current_level.is_empty() {
-                    // Remove trailing newline but preserve internal structure
-                    let level_str = current_level.trim_end();
-                    let game = Game::from_text(level_str)?;
-                    levels.push(game);
-                    current_level.clear();
-                }
-                continue;
-            }
+            // Check if line is part of a level (starts with zero or more spaces followed by '#')
+            let trimmed = line.trim_start();
+            let is_level_line = trimmed.starts_with('#');
 
-            // Skip empty lines when we don't have a level started
-            if line.is_empty() {
+            if !is_level_line {
+                // Line is a separator/comment - save current level if any
                 if !current_level.is_empty() {
-                    // Empty line within a level - end of level
-                    // Remove trailing newline but preserve internal structure
                     let level_str = current_level.trim_end();
                     let game = Game::from_text(level_str)?;
                     levels.push(game);
@@ -84,9 +73,8 @@ impl Levels {
             current_level.push('\n');
         }
 
-        // Don't forget the last level if file doesn't end with empty line
+        // Don't forget the last level if file doesn't end with a separator
         if !current_level.is_empty() {
-            // Remove trailing newline but preserve internal structure
             let level_str = current_level.trim_end();
             let game = Game::from_text(level_str)?;
             levels.push(game);
