@@ -197,6 +197,8 @@ impl fmt::Display for RawBitboard {
     }
 }
 
+/// A lazy bitboard is an implementation of Bitboard that does not require
+/// zeroing out all 512 bytes of bitboard data on initialization.
 pub struct LazyBitboard {
     data: [MaybeUninit<u64>; 64],
     initialized: u64,

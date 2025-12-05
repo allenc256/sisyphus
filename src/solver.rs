@@ -211,16 +211,20 @@ impl SearchHelper for ReverseSearchHelper {
     }
 }
 
+/// An open-list node.
 struct Node {
     checkpoint: Checkpoint,
     frozen_boxes: Bitvector,
 }
 
+/// A transpotion table entry.
 struct TableEntry {
     parent_hash: u64,
     is_closed: bool,
 }
 
+/// Searcher which searches in a single direction (either forward/pushes or
+/// reverse/pulls).
 struct Searcher<H, S> {
     game: Game,
     open_list: PriorityQueue<Node>,
@@ -230,9 +234,13 @@ struct Searcher<H, S> {
     helper: S,
 }
 
+/// Result of expanding a node.
 enum ExpandNode {
+    /// Expansion was successful, but search is not done.
     NotDone,
+    /// Game has been solved.
     Solved,
+    /// Search has exhausted all possible nodes.
     Unsolvable,
 }
 
@@ -508,6 +516,7 @@ impl<H: Heuristic, S: SearchHelper> Searcher<H, S> {
     }
 }
 
+/// Solver which performs bidirectional search.
 pub struct Solver<H> {
     forward: Searcher<H, ForwardSearchHelper>,
     reverse: Searcher<H, ReverseSearchHelper>,

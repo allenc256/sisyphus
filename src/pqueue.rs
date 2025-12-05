@@ -3,6 +3,8 @@ use std::collections::VecDeque;
 const NUM_BUCKETS: usize = 4096;
 const NUM_WORDS: usize = NUM_BUCKETS / 64;
 
+/// A bucketed priority queue implementation which supports O(1) pop-min.
+/// Priority values must lie within the range 0..4096
 pub struct PriorityQueue<T> {
     buckets: [VecDeque<T>; NUM_BUCKETS],
     bitmap: [u64; NUM_WORDS],

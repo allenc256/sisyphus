@@ -3,7 +3,7 @@ use arrayvec::ArrayVec;
 use crate::bits::Bitvector;
 use crate::game::{ALL_DIRECTIONS, Direction, Game, Index, MAX_BOXES, Position, Tile};
 
-/// Computes the set of boxes which are currently effectively frozen
+/// Computes the set of boxes which are currently effectively frozen.
 pub fn compute_frozen_boxes(game: &Game) -> Bitvector {
     let mut result = Bitvector::new();
     for box_idx in 0..game.box_count() {

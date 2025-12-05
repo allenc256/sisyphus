@@ -9,6 +9,69 @@ use crate::{
     zobrist::Zobrist,
 };
 
+pub struct CorralSearcher {
+    deadlocks: DeadlockSearcher,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CorralResult<T> {
+    /// PI-corral pruning applies, and searching should be restricted to the
+    /// specified moves.
+    Prune(Moves<T>),
+    /// A corral deadlock was detected.
+    Deadlocked,
+    /// No pruning can be applied, and no deadlock was detected.
+    None,
+}
+
+impl CorralSearcher {
+    pub fn new(zobrist: Rc<Zobrist>, max_nodes_explored: usize) -> Self {
+        Self {
+            deadlocks: DeadlockSearcher::new(zobrist, max_nodes_explored),
+        }
+    }
+
+    /// Performs a corral-level search for PI-corral pruning and corral
+    /// deadlocks.
+    pub fn search(
+        &mut self,
+        game: &mut Game,
+        reachable: &ReachableSet<Push>,
+    ) -> CorralResult<Push> {
+        let mut result = CorralResult::None;
+        let mut min_cost = usize::MAX;
+        let mut visited = LazyBitboard::new();
+
+        for push in &reachable.moves {
+            let box_pos = game.box_position(push.box_index());
+            let new_pos = game.move_position(box_pos, push.direction()).unwrap();
+            // Look for a corral by examining the other side of a push.
+            if !reachable.squares.get(new_pos) && !visited.get(new_pos) {
+                if let Some(corral) = compute_corral(game, new_pos, reachable) {
+                    visited.set_all(&corral.extent);
+                    if corral.i_condition {
+                        // Check for corral deadlocks
+                        if self.deadlocks.search(game, &corral) == DeadlockResult::Deadlocked {
+                            return CorralResult::Deadlocked;
+                        }
+
+                        // This is PI-corral, so it is eligible for pruning
+                        if corral.p_condition {
+                            let cost = corral.pushes.len();
+                            if cost < min_cost {
+                                result = CorralResult::Prune(corral.pushes);
+                                min_cost = cost;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        result
+    }
+}
+
 struct Corral {
     /// The boxes in the corral, including boxes on the edge of the corral.
     boxes: Bitvector,
@@ -120,63 +183,6 @@ fn compute_corral(game: &Game, pos: Position, reachable: &ReachableSet<Push>) ->
         i_condition,
         p_condition,
     })
-}
-
-pub struct CorralSearcher {
-    deadlocks: DeadlockSearcher,
-}
-
-impl CorralSearcher {
-    pub fn new(zobrist: Rc<Zobrist>, max_nodes_explored: usize) -> Self {
-        Self {
-            deadlocks: DeadlockSearcher::new(zobrist, max_nodes_explored),
-        }
-    }
-
-    pub fn search(
-        &mut self,
-        game: &mut Game,
-        reachable: &ReachableSet<Push>,
-    ) -> CorralResult<Push> {
-        let mut result = CorralResult::None;
-        let mut min_cost = usize::MAX;
-        let mut visited = LazyBitboard::new();
-
-        for push in &reachable.moves {
-            let box_pos = game.box_position(push.box_index());
-            let new_pos = game.move_position(box_pos, push.direction()).unwrap();
-            // Look for a corral by examining the other side of a push.
-            if !reachable.squares.get(new_pos) && !visited.get(new_pos) {
-                if let Some(corral) = compute_corral(game, new_pos, reachable) {
-                    visited.set_all(&corral.extent);
-                    if corral.i_condition {
-                        // Check for corral deadlocks
-                        if self.deadlocks.search(game, &corral) == DeadlockResult::Deadlocked {
-                            return CorralResult::Deadlocked;
-                        }
-
-                        // This is PI-corral, so it is eligible for pruning
-                        if corral.p_condition {
-                            let cost = corral.pushes.len();
-                            if cost < min_cost {
-                                result = CorralResult::Prune(corral.pushes);
-                                min_cost = cost;
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        result
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum CorralResult<T> {
-    Prune(Moves<T>),
-    Deadlocked,
-    None,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

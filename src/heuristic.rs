@@ -39,6 +39,7 @@ pub trait Heuristic {
     fn compute(&self, game: &Game) -> Cost;
 }
 
+/// The null heuristic always reports 0 as the cost.
 pub struct NullHeuristic;
 
 impl Heuristic for NullHeuristic {
@@ -55,7 +56,8 @@ impl Heuristic for NullHeuristic {
     }
 }
 
-/// A heuristic based on simple matching of boxes to goals using precomputed push/pull distances.
+/// A heuristic based on simple but fast matching of boxes to goals where
+/// boxes/goals can be re-used within the matching.
 pub struct SimpleHeuristic {
     /// distances[idx][y][x] = minimum pushes/pulls to get a box from (x, y) to destination idx
     distances: Box<[[[u16; MAX_SIZE]; MAX_SIZE]; MAX_BOXES]>,
