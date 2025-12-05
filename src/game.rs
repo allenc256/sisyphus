@@ -865,6 +865,45 @@ impl AsRef<Game> for Game {
     }
 }
 
+impl Game {
+    pub fn print_with_frozen_boxes(&self, frozen_boxes: &Bitvector) {
+        for y in 0..self.height {
+            let mut line = String::new();
+            for x in 0..self.width {
+                let pos = Position(x, y);
+                let tile = self.tiles[y as usize][x as usize];
+                let box_idx = self.box_index(pos);
+                let is_frozen_box = box_idx.is_some_and(|idx| frozen_boxes.contains(idx));
+                let has_box = box_idx.is_some();
+                let is_player = pos == self.player;
+
+                let ch = if is_frozen_box {
+                    'X'
+                } else if is_player {
+                    match tile {
+                        Tile::Goal => '+',
+                        _ => '@',
+                    }
+                } else if has_box {
+                    match tile {
+                        Tile::Goal => '*',
+                        _ => '$',
+                    }
+                } else {
+                    match tile {
+                        Tile::Wall => '#',
+                        Tile::Floor => ' ',
+                        Tile::Goal => '.',
+                    }
+                };
+                line.push(ch);
+            }
+            // Trim trailing spaces to match original input format
+            println!("{}", line.trim_end());
+        }
+    }
+}
+
 impl fmt::Display for Game {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         for y in 0..self.height {

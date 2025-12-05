@@ -317,6 +317,10 @@ fn compute_push_distances(
     game: &Game,
     frozen_boxes: &Bitvector,
 ) -> [[[u16; MAX_SIZE]; MAX_SIZE]; MAX_BOXES] {
+    println!("frozen_boxes={}:", frozen_boxes);
+    game.print_with_frozen_boxes(frozen_boxes);
+    println!();
+
     let mut distances = [[[u16::MAX; MAX_SIZE]; MAX_SIZE]; MAX_BOXES];
 
     for (goal_idx, &goal_pos) in game.goal_positions().iter().enumerate() {
@@ -347,9 +351,17 @@ fn bfs_pulls(
     frozen_boxes: &Bitvector,
     distances: &mut [[u16; MAX_SIZE]; MAX_SIZE],
 ) {
+    distances[goal_pos.1 as usize][goal_pos.0 as usize] = 0;
+
+    // Check if this goal is frozen
+    if let Some(box_idx) = game.box_index(goal_pos) {
+        if frozen_boxes.contains(box_idx) {
+            return;
+        }
+    }
+
     let mut queue = VecDeque::new();
     queue.push_back(goal_pos);
-    distances[goal_pos.1 as usize][goal_pos.0 as usize] = 0;
 
     while let Some(box_pos) = queue.pop_front() {
         let dist = distances[box_pos.1 as usize][box_pos.0 as usize];
