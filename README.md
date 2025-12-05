@@ -10,10 +10,11 @@ vibe-coding something containing non-trivial logic.
 My findings have been that Claude Code (Sonnet 4.5) was exceptional for helping
 with a lot of "easier" tasks (e.g., level parsing logic, basic game logic,
 writing tests, basic search logic, basic heuristic logic, zobrist hashing), but
-struggled on certain "harder". For example, Claude struggled with understanding
-how to properly implement bidirectional search (though forward search was fine)
-and more complex deadlock detection techniques. These were most likely
-"out-of-distribution" for the model and had to be coded mostly by hand.
+struggled on certain "harder" tasks. For example, Claude struggled with
+understanding how to properly implement bidirectional search (though forward
+search was fine) as well as more complex deadlock detection techniques. These
+were most likely "out-of-distribution" for the model and had to be coded mostly
+by hand.
 
 In all, I'd say about 60% of the code was vibe-coded, and about 40% was
 hand-written. Not bad! Overall, AI assistance felt like a big productivity
@@ -21,6 +22,8 @@ boost, and it wouldn't be surprising if future versions could hand the more
 "harder" tasks as well!
 
 ## Building
+
+This is a standard rust project, so just:
 
 ```
 cargo build --release
